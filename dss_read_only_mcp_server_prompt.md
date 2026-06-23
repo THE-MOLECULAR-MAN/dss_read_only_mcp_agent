@@ -384,13 +384,19 @@ Likely approaches (verify each):
 - Agent Hub: look for agent hub configuration in project settings.
 
 ## Dashboards
+Dashboards can have multiple pages; count tiles across **all** pages, not just the first:
+
 ```python
-dashboards = project.list_dashboards()       # list of dashboard summary dicts
+dashboards = project.list_dashboards()
 dashboard_count = len(dashboards)
-total_tiles = sum(
-    len(project.get_dashboard(d["id"]).get_raw().get("pages", [{}])[0].get("tiles", []))
-    for d in dashboards
-)
+total_tiles = 0
+for d in dashboards:
+    try:
+        raw = project.get_dashboard(d["id"]).get_raw()
+        for page in raw.get("pages", []):
+            total_tiles += len(page.get("tiles", []))
+    except Exception:
+        pass
 ```
 > Verify the exact structure of dashboard pages and tiles in the raw dict.
 
@@ -542,14 +548,30 @@ Use `.get(key, default)` — never direct key access — on all dicts from the D
 # Security & Data Handling
 
 ## Sensitive Data Redaction
-Some DSS API methods return credentials (e.g., `get_basic_credential()`). Before returning any data, replace the *values* of these field names with `"[REDACTED]"`:
+Some DSS API methods embed credentials in their return values. The first line of defense is **never calling** the most dangerous methods (see Restrictions). For everything else, apply field-name redaction before returning any data to the MCP client.
 
-`password`, `passwd`, `secret`, `apiKey`, `api_key`, `token`, `bearerToken`, `credential`, `privateKey`
+Replace the *values* (not keys) of these field names with `"[REDACTED]"`:
 
-Apply redaction recursively to nested dicts and lists.
+`password`, `passwd`, `secret`, `apiKey`, `api_key`, `token`, `bearerToken`, `accessToken`, `secretKey`, `accessKey`, `sessionToken`, `credential`, `privateKey`, `clientSecret`, `ssoToken`, `authToken`
+
+Apply redaction **recursively** to nested dicts and lists.
+
+> These field names come directly from the DSS API response shapes for connections, global variables, and user objects. Do not rely only on these names — if a value looks like a credential (long random string, Base64, JWT format), redact it even if the field name is not on this list.
+
+## Global and Instance-Level Variables
+`client.get_global_variables()`, `client.get_variables()`, and `client.get_resolved_variables()` return instance-wide variables that frequently contain API keys, passwords, or DSN strings. Apply redaction rules to all values before returning. Prefer returning only variable *names* if that is sufficient for the use case.
 
 ## Project Variables
-`project.get_variables()` returns a flat dict of project-level variables. These frequently contain API keys, passwords, or connection strings stored as plain text. Apply the same field-name redaction rules to any project variable values before returning them. If surfacing variable data in a tool response, prefer returning only the variable *names* (not values) so the LLM can see what is configured without exposing credentials.
+`project.get_variables()` works the same way at the project level. Return variable names only, never raw values.
+
+## Connection Objects — Avoid Credential Methods Entirely
+Do not call `get_info()`, `get_definition()`, `get_aws_credential()`, `get_oauth2_credential()`, `get_basic_credential()`, `get_params()`, or `get_resolved_params()` on any `DSSConnection` object. These methods exist to provide credentials to legitimate clients and will return plaintext or lightly encoded secrets. To describe what connections a project uses, read connection *names* and *types* from dataset metadata only — never inspect the connection object itself.
+
+## User and Group Data
+`client.list_users()`, `client.get_user()`, and related calls may return hashed passwords, internal user IDs, or other PII depending on the auth backend configured. If user data must be returned, include only `login`, `displayName`, and `groups` — omit all other fields.
+
+## System Logs
+`client.get_log()` and `client.list_logs()` may contain connection strings, API calls with embedded tokens, and internal stack traces. Do not expose log content directly. If a log is needed for debugging, strip lines matching credential patterns before returning.
 
 ## API Key Safety
 Never log, echo, or include the value of `DSS_API_KEY` in any tool response or error message.
@@ -562,13 +584,37 @@ Never log, echo, or include the value of `DSS_API_KEY` in any tool response or e
 ### Safe method prefixes
 `get_`, `list_`
 
+> **Important**: Having a `get_` or `list_` prefix is necessary but not sufficient. Several `get_*` and `list_*` methods return highly sensitive data or trigger side effects — see the explicit forbidden list below.
+
 ### Forbidden method prefixes — never use
-`build_`, `create_`, `delete_`, `duplicate_`, `install_`, `new_`, `remove_`, `set_`, `train_`
+`abort_`, `activate_`, `add_`, `build_`, `clear_`, `commit_`, `compute_`, `create_`, `delete_`, `deploy_`, `duplicate_`, `edit_`, `export_`, `import_`, `install_`, `move_`, `new_`, `promote_`, `publish_`, `push_`, `remove_`, `rename_`, `repair_`, `reset_`, `restart_`, `run_`, `set_`, `start_`, `sync_`, `train_`, `trigger_`, `update_`, `upload_`
+
+### Explicitly forbidden methods (regardless of prefix)
+These have safe-looking names but must never be called:
+
+| Method | Why forbidden |
+|---|---|
+| `DSSClient.sql_query()` | Executes arbitrary SQL — can return full data rows, not just metadata |
+| `DSSProject.start_job()` | Creates and triggers a compute job |
+| `DSSProject.get_export_stream()` | Streams full project archive — heavy, exposes all project contents |
+| `DSSConnection.get_info()` | Returns **decrypted** plaintext credentials |
+| `DSSConnection.get_definition()` | Returns raw dict containing encrypted passwords/secrets |
+| `DSSConnection.get_aws_credential()` | Returns AWS access key, secret key, and STS session token |
+| `DSSConnection.get_oauth2_credential()` | Returns OAuth access tokens |
+| `DSSConnection.get_params()` / `get_resolved_params()` | May contain embedded credentials depending on connection type |
+| `DSSClient.get_personal_api_key()` | Returns a stored API key |
+| `DSSClient.list_global_api_keys()` / `list_personal_api_keys()` / `list_all_personal_api_keys()` | Lists API key secrets |
+| `DSSClient.get_log()` / `list_logs()` | System logs may contain connection strings and embedded tokens |
+| `DSSScenario.run()` / `run_and_wait()` | Triggers scenario execution |
+| `DSSScenario.abort()` / `DSSJob.abort()` | Kills running work |
+| `DSSConnection.sync_root_acls()` / `sync_datasets_acls()` | Mutates ACL state |
+| `DSSScenarioSettings.save()` and any `.save()` method | Persists configuration changes |
 
 ### Additional forbidden actions
 - Do not trigger jobs, scenarios, or any compute-consuming operation
 - Do not modify project or node configuration (plugins, code environments, users, connections)
 - Do not call any method that rebuilds, re-indexes, or retrains anything
+- Do not call methods on `DSSConnection` that return credential data — retrieve connection *names* and *types* only
 
 ---
 
@@ -611,6 +657,20 @@ code_env_handles = _client.list_code_envs(as_objects=True)  # fast on large inst
 
 ## 4. Wrap Per-Object Accessors in try/except
 Projects and their child objects (datasets, recipes, analyses) can be in broken states. Always wrap per-object detail fetching, especially inside loops.
+
+---
+
+# Resolved Deployment Decisions
+
+| Decision | Answer |
+|---|---|
+| **MCP transport** | `stdio` — for Claude Desktop / local CLI. FastMCP: `mcp.run(transport="stdio")` |
+| **Packaging** | `pyproject.toml` with `hatchling`. Entry points: `python -m dss_mcp` or the `dss-mcp-server` console script. Configure in `claude_desktop_config.json` (see `server.py` docstring). |
+| **`list_projects()` pagination** | Returns all projects in a single call — no pagination. May return up to 5,000 entries. |
+| **API key scope** | Assume admin-level, but degrade gracefully. Access whatever projects the configured key can see. Do not hard-fail if node-level APIs return permission errors. |
+| **Target node type** | Always a **Design node**. APIs specific to Automation or Deployer nodes (e.g., bundle activation) should be called defensively and return graceful fallbacks if unavailable. |
+| **Contributor count** | Use `project.get_timeline()`. The `allContributors` field is a list of all contributors. `contributor_count = len(timeline.get("allContributors", []))`. |
+| **Logging** | Write a structured JSON-Lines log file. Default path: `~/.dss-mcp/server.log`, configurable via `DSS_MCP_LOG_DIR` env var. Never write credential values to logs. |
 
 ---
 
