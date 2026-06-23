@@ -10,10 +10,11 @@ try:
     import dataikuapi
 except ImportError as _e:
     raise ImportError(
-        "dataikuapi is required but could not be imported.\n"
-        "  Claude Desktop: reinstall with  pip install -e '.[claude]'\n"
-        "  DSS Agent Tool: dataikuapi is bundled in every DSS code environment "
-        "— ensure the code environment is correctly attached to the agent."
+        "dataikuapi is required but could not be imported. "
+        "Reinstall the package:  pip install -e .  (or "
+        "git+https://github.com/THE-MOLECULAR-MAN/dss_read_only_mcp_agent.git "
+        "for DSS code environments). dataiku-api-client must be present in "
+        "whichever Python environment runs this server."
     ) from _e
 
 from dss_mcp.logging_config import get_logger

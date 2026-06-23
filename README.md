@@ -61,10 +61,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 ```bash
-pip install -e ".[claude]"
+pip install -e .
 ```
-
-> **Note:** The `[claude]` extra installs the `dataiku-api-client` package. DSS Agent Tool installations omit this because DSS bundles the equivalent library automatically.
 
 Save the paths printed by this command — you'll need them in Step 4:
 
@@ -189,11 +187,10 @@ In DSS: **Administration → Code envs → New Python env**
 - Add the following packages:
 
 ```
-fastmcp>=2.0
-git+https://github.com/THE-MOLECULAR-MAN/dss_read_only_mcp_agent.git
+git+https://github.com/THE-MOLECULAR-MAN/dss_read_only_mcp_agent.git@dss-agent-tool-compat
 ```
 
-> **Do not add `dataiku-api-client`** — DSS already bundles the equivalent `dataikuapi` library in every code environment. Installing it separately may cause a version conflict.
+`dataiku-api-client` (which provides `dataikuapi`) is declared as a dependency of the package and will be installed automatically. DSS code environments are isolated from the main DSS Python installation, so the package is not available automatically and must be installed explicitly.
 
 Build the environment.
 
