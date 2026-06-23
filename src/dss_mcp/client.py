@@ -6,7 +6,15 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-import dataikuapi
+try:
+    import dataikuapi
+except ImportError as _e:
+    raise ImportError(
+        "dataikuapi is required but could not be imported.\n"
+        "  Claude Desktop: reinstall with  pip install -e '.[claude]'\n"
+        "  DSS Agent Tool: dataikuapi is bundled in every DSS code environment "
+        "— ensure the code environment is correctly attached to the agent."
+    ) from _e
 
 from dss_mcp.logging_config import get_logger
 
@@ -23,7 +31,10 @@ class DSSNode:
 
 
 def _make_client(host: str, api_key: str) -> dataikuapi.DSSClient:
-    client = dataikuapi.DSSClient(host=host, api_key=api_key, no_check_certificate=True)
+    # Default True: self-signed certs are common on DSS sandbox/demo instances.
+    # Set DSS_NO_CHECK_CERTIFICATE=false to enable verification (e.g. prod with valid certs).
+    no_check = os.environ.get("DSS_NO_CHECK_CERTIFICATE", "true").lower() != "false"
+    client = dataikuapi.DSSClient(host=host, api_key=api_key, no_check_certificate=no_check)
     if hasattr(client, "_session"):
         client._session.timeout = (10, 60)
     return client
@@ -60,8 +71,16 @@ def _load_nodes() -> list[DSSNode]:
         nodes.append(DSSNode(name=name, host=host, pool=node_pool))
 
     if not nodes:
-        host = os.environ["DSS_HOST"]
-        key = os.environ["DSS_API_KEY"]
+        try:
+            host = os.environ["DSS_HOST"]
+            key = os.environ["DSS_API_KEY"]
+        except KeyError as missing:
+            raise RuntimeError(
+                f"Required environment variable {missing} is not set. "
+                "Configure DSS_HOST and DSS_API_KEY in your Claude Desktop env block "
+                "or DSS agent tool environment variables. "
+                "For multi-node setups use DSS_NODE_1_HOST / DSS_NODE_1_KEY instead."
+            ) from None
         name = os.environ.get("DSS_NODE_NAME", _name_from_host(host))
         node_pool = queue.Queue()
         for _ in range(_POOL_SIZE):

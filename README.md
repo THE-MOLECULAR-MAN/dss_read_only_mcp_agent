@@ -1,47 +1,44 @@
 # DSS Demo Finder — MCP Server for Claude
 
-This tool connects Claude Desktop to a live Dataiku DSS instance. Once installed, you can ask Claude to find the best demo projects for a prospect, and it will search your DSS node directly, evaluate each project's demo-readiness, and give you ranked recommendations.
+This tool connects an AI assistant directly to your Dataiku DSS instances. Once installed, you can ask Claude (or a DSS agent) to find the best demo projects for a prospect, and it will search across all connected DSS nodes in parallel, evaluate each project's demo-readiness, and return ranked recommendations with direct links.
 
-**Example:**
-> *"I have a meeting tomorrow with a retail company interested in demand forecasting and LLM-powered applications. Find me the three best demo projects on our DSS instance."*
-
-Claude will scan all projects, read their contents in parallel, and return ranked picks with explanations — without you having to open DSS at all.
+**Example prompt:**
+> *"I have a meeting tomorrow with a retail company interested in demand forecasting and LLM-powered applications. Find me the three best demo projects on our DSS instances."*
 
 ---
 
-## Before you start
+## Choose your setup track
 
-You need three things installed on your Mac before following these steps:
+- **[Track A — Claude Desktop](#track-a--claude-desktop)** — Run the server locally on your Mac; Claude Desktop talks to it
+- **[Track B — DSS Agent Tool](#track-b--dss-agent-tool)** — Deploy inside DSS as a local MCP tool so any DSS agent can use it
 
-### 1. Check Python
+Both tracks use the same server code and the same environment variable configuration. The only difference is where the package is installed and how credentials are supplied.
 
-Open **Terminal** (press `Cmd + Space`, type `Terminal`, press Enter) and run:
+---
 
+## Track A — Claude Desktop
+
+### Prerequisites
+
+Open **Terminal** (`Cmd + Space` → type Terminal → Enter) and verify each of the following.
+
+**Python 3.11+**
 ```bash
 python3 --version
 ```
+You need `Python 3.11` or higher. If not installed, download from [python.org/downloads](https://www.python.org/downloads/).
 
-You need version **3.11 or higher**. If you see something like `Python 3.11.4` or `Python 3.14.6`, you're good. If you see `command not found` or a version below 3.11, install Python from [python.org/downloads](https://www.python.org/downloads/) before continuing.
-
-### 2. Check Claude Desktop
-
-Make sure Claude Desktop is installed and you can open it. You can download it from [claude.ai/download](https://claude.ai/download) if needed.
-
-### 3. Check Git
-
-In Terminal, run:
-
+**Git**
 ```bash
 git --version
 ```
+If not found, macOS will prompt you to install it.
 
-If you see a version number, you have Git. If not, macOS will prompt you to install it — click Install and wait for it to finish.
+**Claude Desktop** — download from [claude.ai/download](https://claude.ai/download) if needed.
 
 ---
 
-## Step 1 — Download the server
-
-In Terminal, run these commands one at a time. Each line copies and pastes on its own.
+### Step 1 — Download the server
 
 ```bash
 cd ~
@@ -53,13 +50,9 @@ git clone https://github.com/THE-MOLECULAR-MAN/dss_read_only_mcp_agent.git
 cd dss_read_only_mcp_agent
 ```
 
-You should now be inside the project folder. Your Terminal prompt will show `dss_read_only_mcp_agent` at the end.
-
 ---
 
-## Step 2 — Install the server
-
-Still in Terminal, run these commands in order:
+### Step 2 — Install the server
 
 ```bash
 python3 -m venv .venv
@@ -68,69 +61,40 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 ```bash
-pip install -e .
+pip install -e ".[claude]"
 ```
 
-The last command installs all dependencies. It may take a minute. When it finishes you'll see a line like `Successfully installed dss-mcp-server-0.1.0 ...`.
+> **Note:** The `[claude]` extra installs the `dataiku-api-client` package. DSS Agent Tool installations omit this because DSS bundles the equivalent library automatically.
 
-### Save the paths you'll need
-
-Now run this command — it will print the two values you need for the next step:
+Save the paths printed by this command — you'll need them in Step 4:
 
 ```bash
 echo "Python path: $(pwd)/.venv/bin/python" && echo "Install dir:  $(pwd)"
 ```
 
-You'll see output like:
-```
-Python path: /Users/yourname/dss_read_only_mcp_agent/.venv/bin/python
-Install dir:  /Users/yourname/dss_read_only_mcp_agent
-```
-
-**Copy both lines somewhere** (Notes app, a text file) — you'll paste them into the config file shortly.
-
 ---
 
-## Step 3 — Get your DSS API key
-
-You need a personal API key from your DSS instance.
+### Step 3 — Get your DSS API key
 
 1. Open your DSS instance in a browser and log in.
-2. Click your **profile icon** in the top-right corner.
-3. Click **Profile & Settings** (or just **Profile**).
-4. In the left sidebar, click **API Keys**.
-5. Click **+ New Key** (you can give it any name, e.g. "Claude MCP").
-6. Copy the key that appears — it starts with `dkuaps-` and looks like `dkuaps-aBcDeFgHiJkLmNoPqRsTuVwXyZ`.
+2. Click your **profile icon** (top-right) → **Profile & Settings** → **API Keys**.
+3. Click **+ New Key** (name it anything, e.g. "Claude MCP").
+4. Copy the key — it looks like `dkuaps-aBcDeFgHiJkLmNoPqRsTuVwXyZ`.
 
 > **Keep this key private.** It provides read access to everything visible to your DSS user account.
 
 ---
 
-## Step 4 — Configure Claude Desktop
+### Step 4 — Configure Claude Desktop
 
-### 4a. Close Claude Desktop
+**4a. Quit Claude Desktop completely** before editing the config file (right-click Dock icon → Quit).
 
-Quit Claude Desktop completely before editing the config file — it overwrites the file when it exits.
-
-### 4b. Open the config file
-
-In Terminal, run:
-
+**4b. Open the config file:**
 ```bash
 open -a TextEdit "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 ```
 
-This opens the Claude Desktop config file in TextEdit.
-
-### 4c. Add the DSS server
-
-Find the line that says:
-
-```json
-"mcpServers": {},
-```
-
-Replace it with the block below. **Before pasting, substitute your actual values for the three placeholders** (the Python path and install dir you saved in Step 2, and your API key from Step 3):
+**4c.** Find the `"mcpServers"` block and add the entry below. Replace the three placeholders with your actual values from Steps 2 and 3:
 
 ```json
 "mcpServers": {
@@ -146,8 +110,7 @@ Replace it with the block below. **Before pasting, substitute your actual values
 },
 ```
 
-**Filled-in example** (your values will differ):
-
+**Filled-in example:**
 ```json
 "mcpServers": {
   "dss-demo-finder": {
@@ -162,17 +125,34 @@ Replace it with the block below. **Before pasting, substitute your actual values
 },
 ```
 
-Save the file (`Cmd + S`) and close TextEdit.
+Save (`Cmd + S`) and close TextEdit.
 
-> **Note on the DSS_HOST value:** use the base URL of your DSS instance — no trailing slash, no path after the domain. If you open DSS in your browser and the URL looks like `https://acme.dataiku-sandbox.io/projects/`, just use `https://acme.dataiku-sandbox.io`.
+> **Tip:** Use the base URL only — no trailing slash, no `/projects/` path.
 
 ---
 
-## (Optional) Connecting to multiple DSS nodes
+### Step 5 — Start Claude Desktop and verify
 
-If you have access to more than one DSS design node (for example, a regional demo instance plus a solutions-hub instance), you can connect Claude to all of them at once. Claude will search all nodes in parallel and return results that include a direct link to each project on the correct instance.
+Open Claude Desktop. Click the tools icon in the chat input bar — you should see `dss-demo-finder` with four tools: `list_projects`, `get_project_summary`, `list_all_tags`, `get_node_info`.
 
-Instead of the `DSS_HOST` / `DSS_API_KEY` keys, use numbered keys for each node. You can add up to 19 nodes:
+---
+
+### Step 6 — Try it out
+
+**Find demos for a prospect:**
+> *"I'm meeting with a retail bank interested in fraud detection. Find me the top 3 demo projects."*
+
+**Explore by industry or capability:**
+> *"Which projects use LLM connections or AI agents and have dashboards ready to show?"*
+
+**Check what tags exist:**
+> *"What tags and industry categories do our demo projects cover?"*
+
+---
+
+## (Optional) Connecting to multiple DSS nodes — Claude Desktop
+
+To search multiple DSS design nodes simultaneously, use numbered env vars instead of `DSS_HOST`/`DSS_API_KEY`:
 
 ```json
 "env": {
@@ -185,95 +165,152 @@ Instead of the `DSS_HOST` / `DSS_API_KEY` keys, use numbered keys for each node.
 }
 ```
 
-`DSS_NODE_N_NAME` is optional — if omitted, the name is derived from the hostname automatically.
-
-Each DSS instance has its own API key. Follow Step 3 on each instance to generate the right key for that node.
-
-> **Important:** do not mix `DSS_HOST`/`DSS_API_KEY` with `DSS_NODE_N_*` keys in the same config block. Use one format or the other.
+`DSS_NODE_N_NAME` is optional — the name is derived from the hostname if omitted. Up to 19 nodes are supported. Do not mix the `DSS_HOST` / `DSS_NODE_N_HOST` formats in the same config block.
 
 ---
 
-## Step 5 — Start Claude Desktop and verify
+## Track B — DSS Agent Tool
 
-Open Claude Desktop. Look for the **MCP tools icon** (a hammer or plug icon) in the chat input bar. Click it — you should see `dss-demo-finder` listed with four tools: `list_projects`, `get_project_summary`, `list_all_tags`, and `get_node_info`.
+This track deploys the server inside DSS as a **local MCP tool**, so any DSS agent can use it without anyone installing anything locally. The agent can search across other DSS nodes (or its own) and return direct project links.
 
-If the server doesn't appear, see [Troubleshooting](#troubleshooting) below.
+### Prerequisites
+
+- DSS 14.x or later with the **Agents** feature enabled
+- Admin or operator access to create code environments and configure agent tools
+- API keys for each DSS node you want to search (same Step 3 process as Track A, once per node)
 
 ---
 
-## Step 6 — Try it out
+### Step 1 — Create a DSS code environment
 
-Here are some example prompts to get started:
+In DSS: **Administration → Code envs → New Python env**
 
-**Find demos for a specific prospect:**
-> *"I'm meeting with a retail bank tomorrow interested in fraud detection and explainability. Find me the top 3 demo projects on our DSS instance."*
+- Python version: **3.11** or higher
+- Add the following packages:
 
-**Find AI/LLM showcases:**
-> *"Which projects use LLM connections or AI agents and have dashboards ready to show?"*
+```
+fastmcp>=2.0
+git+https://github.com/THE-MOLECULAR-MAN/dss_read_only_mcp_agent.git
+```
 
-**Check what's available by industry:**
-> *"What tags and industry categories do our demo projects cover? Give me a breakdown."*
+> **Do not add `dataiku-api-client`** — DSS already bundles the equivalent `dataikuapi` library in every code environment. Installing it separately may cause a version conflict.
 
-**Find the most polished projects:**
-> *"Show me projects with the highest job success rates that have been updated in the last 6 months."*
+Build the environment.
 
-**Find tutorial or solutions hub projects:**
-> *"Which projects came from the Dataiku solutions hub or are tutorial projects?"*
+---
+
+### Step 2 — Create the agent tool definition
+
+In DSS: navigate to the agent that should use this tool, go to **Tools → Add tool → Local MCP**.
+
+Fill in the fields:
+
+| Field | Value |
+|-------|-------|
+| Command | `python` |
+| Arguments | `-m dss_mcp` |
+| Code environment | *(the env you created in Step 1)* |
+
+Then add environment variables (one row per variable):
+
+**Single-node:**
+
+| Variable | Value |
+|----------|-------|
+| `DSS_HOST` | `https://your-dss-instance.example.com` |
+| `DSS_API_KEY` | `dkuaps-aBcDeFgHiJkLmNoPqRsTuVwXyZ` |
+
+**Multi-node:**
+
+| Variable | Value |
+|----------|-------|
+| `DSS_NODE_1_HOST` | `https://first-node.example.com` |
+| `DSS_NODE_1_KEY` | `dkuaps-...` |
+| `DSS_NODE_1_NAME` | `first-node` *(optional)* |
+| `DSS_NODE_2_HOST` | `https://second-node.example.com` |
+| `DSS_NODE_2_KEY` | `dkuaps-...` |
+| `DSS_NODE_2_NAME` | `second-node` *(optional)* |
+
+---
+
+### Step 3 — Load tools and verify
+
+Click **Load tools** in the tool definition. You should see four tools appear:
+
+- `list_projects`
+- `get_project_summary`
+- `list_all_tags`
+- `get_node_info`
+
+Enable the tools you want the agent to use, then save.
+
+---
+
+### Step 4 — Test the agent
+
+Run the agent with a prompt like:
+
+> *"List all projects visible across the connected DSS nodes and tell me how many are on each node."*
+
+---
+
+### Updating the DSS deployment
+
+To pull a new version, rebuild the code environment — DSS will re-clone the repository from GitHub. Pin to a specific git tag or commit hash in the package URL to control when updates take effect:
+
+```
+git+https://github.com/THE-MOLECULAR-MAN/dss_read_only_mcp_agent.git@v1.2.3
+```
+
+---
+
+## Optional environment variables (both tracks)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DSS_NO_CHECK_CERTIFICATE` | `true` | Set to `false` to enable TLS certificate verification. Useful for production nodes with valid certs. |
+| `DSS_MCP_LOG_DIR` | `~/.dss-mcp` | Directory for the structured JSON log file (`server.log`). |
 
 ---
 
 ## Troubleshooting
 
 ### The server doesn't appear in Claude Desktop
+1. The `"command"` path must point to Python inside `.venv`, not system Python.
+2. Validate your JSON at [jsonlint.com](https://jsonlint.com) — a stray comma breaks the whole file.
+3. Fully quit Claude Desktop before editing (right-click Dock icon → Quit).
 
-1. Double-check that the `"command"` path in the config points to the Python inside `.venv`, not your system Python. It should end in `.venv/bin/python`.
-2. Make sure there are no extra commas or missing quotes in the JSON — JSON is picky. Paste your config into [jsonlint.com](https://jsonlint.com) to check for errors.
-3. Make sure you fully quit Claude Desktop before editing the file (right-click the Dock icon → Quit, not just close the window).
+### Tools don't load in DSS
+1. Confirm the code environment built without errors and is attached to the tool.
+2. Check that `DSS_HOST` and `DSS_API_KEY` (or `DSS_NODE_N_*` equivalents) are set in the tool's env vars.
+3. Try running `python -m dss_mcp --help` in a DSS terminal with the code environment activated to confirm the package is installed.
 
-### Claude says it can't connect to DSS
-
-- Confirm `DSS_HOST` is the correct URL and you can open it in your browser.
-- Confirm the API key is valid: try logging into DSS, go to Profile → API Keys, and verify the key exists.
-- If your DSS instance uses a self-signed certificate, the server already disables certificate verification — this should not be an issue.
-
-### "Python not found" or version errors
-
-Make sure the `"command"` value is the full path ending in `.venv/bin/python`, not just `python` or `python3`. Claude Desktop does not use your shell PATH.
+### Claude says it can't connect to DSS / "UnauthorizedException"
+- Confirm `DSS_HOST` is reachable from the machine running the server.
+- Verify the API key is valid: Profile → API Keys in DSS.
+- `get_node_info` requires an admin-level key. `list_projects` and `get_project_summary` work with any project-member key.
 
 ### Log file
-
-If something goes wrong, the server writes a diagnostic log to:
-
-```
-~/.dss-mcp/server.log
-```
-
-Open it in TextEdit or Terminal (`cat ~/.dss-mcp/server.log`) to see error messages.
+The server writes structured JSON logs to `~/.dss-mcp/server.log` (or `$DSS_MCP_LOG_DIR/server.log`).
 
 ---
 
 ## What the server can see
 
-The server connects using your DSS API key and inherits your access level:
-
 - **Admin API key** — sees all projects and node-level settings.
-- **Project-member API key** — sees only projects you're a member of; some fields will be empty or missing.
+- **Project-member key** — sees only projects you're a member of; some fields will be empty.
 
-The server is **strictly read-only**. It only calls `get_*` and `list_*` API methods and cannot modify, build, deploy, or delete anything on your DSS instance.
-
-Credentials and secrets found in DSS project settings are automatically redacted before being sent to Claude — they will appear as `[REDACTED]` in Claude's responses.
+The server is **strictly read-only** — it only calls `get_*` and `list_*` API methods. Credentials and secrets found in DSS project settings are automatically redacted before being returned.
 
 ---
 
-## Updating the server
-
-To pull the latest version:
+## Updating — Claude Desktop
 
 ```bash
 cd ~/dss_read_only_mcp_agent
 git pull
 source .venv/bin/activate
-pip install -e .
+pip install -e ".[claude]"
 ```
 
 Then restart Claude Desktop.
@@ -282,29 +319,12 @@ Then restart Claude Desktop.
 
 ## For developers — running the tests
 
-Install dev dependencies:
-
 ```bash
 pip install -e ".[dev]"
-```
-
-Run all tests:
-
-```bash
 pytest
-```
-
-Run with verbose output:
-
-```bash
 pytest -v
-```
-
-Run a specific file:
-
-```bash
 pytest tests/test_security.py
 pytest tests/test_error_handling.py
 ```
 
-The test suite covers credential redaction, project metadata normalization, recipe categorization, retry behavior, and error handling for every DSS API call (including partial failures where individual datasets or dashboards in a project are in a bad state).
+The `[dev]` extra includes both `pytest` and `dataiku-api-client` so tests run without a live DSS environment. The test suite covers credential redaction, project metadata normalization, recipe categorization, retry behavior, and error handling for every DSS API call.

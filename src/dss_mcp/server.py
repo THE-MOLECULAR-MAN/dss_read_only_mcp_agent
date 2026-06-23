@@ -1,13 +1,16 @@
 """DSS Demo Finder MCP server.
 
-Runs over stdio transport for Claude Desktop. Configure in
-claude_desktop_config.json:
+Runs over stdio transport. Works as both a Claude Desktop MCP server and a
+Dataiku DSS Agent Tool (local MCP).
+
+Claude Desktop — configure in claude_desktop_config.json:
 
     {
       "mcpServers": {
         "dss-demo-finder": {
-          "command": "python",
+          "command": "/path/to/.venv/bin/python",
           "args": ["-m", "dss_mcp"],
+          "cwd": "/path/to/dss_read_only_mcp_agent",
           "env": {
             "DSS_HOST": "https://your-dss-instance.example.com",
             "DSS_API_KEY": "your-api-key-here"
@@ -16,14 +19,23 @@ claude_desktop_config.json:
       }
     }
 
+DSS Agent Tool — configure in the DSS agent tool definition:
+
+    Command : python
+    Args    : -m dss_mcp
+    Env vars: DSS_HOST, DSS_API_KEY  (or DSS_NODE_1_HOST / DSS_NODE_1_KEY
+              for multi-node)
+
 Required environment variables:
     DSS_HOST      Full URL of the DSS Design node
-    DSS_API_KEY   API key with read access (admin-level preferred; degrades
-                  gracefully to project-member scope if not)
+    DSS_API_KEY   API key with read access (admin-level preferred)
 
 Optional:
-    DSS_MCP_LOG_DIR   Directory for structured JSON log file
-                      (default: ~/.dss-mcp/server.log)
+    DSS_NODE_NAME           Display name for the single-node config
+    DSS_NO_CHECK_CERTIFICATE  Set to "false" to enable TLS verification
+                              (default: "true" — skip verification)
+    DSS_MCP_LOG_DIR         Directory for the structured JSON log file
+                            (default: ~/.dss-mcp/server.log)
 """
 
 import sys

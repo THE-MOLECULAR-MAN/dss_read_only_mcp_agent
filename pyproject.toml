@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "Read-only MCP server for Dataiku DSS demo project discovery"
 requires-python = ">=3.11"
 dependencies = [
-    "dataiku-api-client",
     "fastmcp>=2.0",
     "requests>=2.31",
 ]
@@ -17,7 +16,10 @@ dependencies = [
 dss-mcp-server = "dss_mcp.__main__:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+# Claude Desktop: pip install -e ".[claude]"
+# DSS Agent Tool: plain pip install — dataikuapi is bundled in every DSS code environment
+claude = ["dataiku-api-client"]
+dev = ["pytest>=8.0", "dataiku-api-client"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
