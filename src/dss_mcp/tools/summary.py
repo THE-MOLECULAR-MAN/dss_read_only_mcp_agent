@@ -8,6 +8,7 @@ fetches depend on Phase 1 results.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any
 
@@ -54,45 +55,50 @@ def get_project_summary(project_key: str) -> dict:
     Makes multiple parallel API calls. Call this only after list_projects()
     has identified specific candidates — do not call in a loop over all projects.
     """
-    log.info("get_project_summary started", extra={"project_key": project_key})
-    start = time.monotonic()
+    try:
+        log.info("get_project_summary started", extra={"project_key": project_key})
+        start = time.monotonic()
 
-    # --- Phase 1: independent fetches ---
-    p1_futures: dict[str, Future] = {
-        "core":        executor.submit(_fetch_core, project_key),
-        "recipes":     executor.submit(_fetch_recipes, project_key),
-        "datasets":    executor.submit(_fetch_datasets, project_key),
-        "ml_tasks":    executor.submit(_fetch_ml_tasks, project_key),
-        "dashboards":  executor.submit(_fetch_dashboards, project_key),
-        "webapps":     executor.submit(_fetch_webapps, project_key),
-        "scenarios":   executor.submit(_fetch_scenarios, project_key),
-        "jobs":        executor.submit(_fetch_jobs, project_key),
-        "notebooks":   executor.submit(_fetch_notebooks, project_key),
-        "eval_stores": executor.submit(_fetch_eval_stores, project_key),
-        "bundles":     executor.submit(_fetch_bundles, project_key),
-        "workspaces":  executor.submit(_fetch_workspaces, project_key),
-        "llm_agents":  executor.submit(_fetch_llm_agents, project_key),
-    }
-    p1 = _collect(p1_futures, phase=1, project_key=project_key)
+        # --- Phase 1: independent fetches ---
+        p1_futures: dict[str, Future] = {
+            "core":        executor.submit(_fetch_core, project_key),
+            "recipes":     executor.submit(_fetch_recipes, project_key),
+            "datasets":    executor.submit(_fetch_datasets, project_key),
+            "ml_tasks":    executor.submit(_fetch_ml_tasks, project_key),
+            "dashboards":  executor.submit(_fetch_dashboards, project_key),
+            "webapps":     executor.submit(_fetch_webapps, project_key),
+            "scenarios":   executor.submit(_fetch_scenarios, project_key),
+            "jobs":        executor.submit(_fetch_jobs, project_key),
+            "notebooks":   executor.submit(_fetch_notebooks, project_key),
+            "eval_stores": executor.submit(_fetch_eval_stores, project_key),
+            "bundles":     executor.submit(_fetch_bundles, project_key),
+            "workspaces":  executor.submit(_fetch_workspaces, project_key),
+            "llm_agents":  executor.submit(_fetch_llm_agents, project_key),
+        }
+        p1 = _collect(p1_futures, phase=1, project_key=project_key)
 
-    # --- Phase 2: depend on Phase 1 datasets / recipes ---
-    datasets_raw: list[dict] = p1.get("datasets", {}).get("_raw", [])
-    recipes_raw: list[dict] = p1.get("recipes", {}).get("_raw", [])
+        # --- Phase 2: depend on Phase 1 datasets / recipes ---
+        datasets_raw: list[dict] = p1.get("datasets", {}).get("_raw", [])
+        recipes_raw: list[dict] = p1.get("recipes", {}).get("_raw", [])
 
-    p2_futures: dict[str, Future] = {
-        "dq_rules":        executor.submit(_fetch_dq_rules, project_key, datasets_raw),
-        "plugins":         executor.submit(_fetch_plugins, project_key, recipes_raw, datasets_raw),
-        "data_collections": executor.submit(_fetch_data_collections, project_key, datasets_raw),
-    }
-    p2 = _collect(p2_futures, phase=2, project_key=project_key)
+        p2_futures: dict[str, Future] = {
+            "dq_rules":         executor.submit(_fetch_dq_rules, project_key, datasets_raw),
+            "plugins":          executor.submit(_fetch_plugins, project_key, recipes_raw, datasets_raw),
+            "data_collections": executor.submit(_fetch_data_collections, project_key, datasets_raw),
+        }
+        p2 = _collect(p2_futures, phase=2, project_key=project_key)
 
-    elapsed = round(time.monotonic() - start, 2)
-    log.info("get_project_summary completed", extra={
-        "project_key": project_key,
-        "elapsed_s": elapsed,
-    })
+        elapsed = round(time.monotonic() - start, 2)
+        log.info("get_project_summary completed", extra={
+            "project_key": project_key,
+            "elapsed_s": elapsed,
+        })
 
-    return _assemble(project_key, p1, p2)
+        return _assemble(project_key, p1, p2)
+
+    except Exception as e:
+        log.error("get_project_summary failed", extra={"project_key": project_key, "error": str(e)})
+        return {"error": "get_project_summary_failed", "project_key": project_key, "detail": str(e)}
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +132,11 @@ def _fetch_core(project_key: str) -> dict:
         tags_raw = settings_raw.get("tags", [])
         tags = [t.get("name", t) if isinstance(t, dict) else t for t in tags_raw]
 
+        # Identity fields — DSS settings use "label" for the display name and "owner" for login
+        name = settings_raw.get("label") or settings_raw.get("name")
+        short_desc = settings_raw.get("shortDesc")
+        owner_login = settings_raw.get("owner") or settings_raw.get("ownerLogin")
+
         # --- Timeline ---
         contributor_count: int | None = None
         last_modified_on: int | None = None
@@ -138,6 +149,10 @@ def _fetch_core(project_key: str) -> dict:
             log.warning("get_timeline failed", extra={"project_key": project_key, "error": str(e)})
 
         return {
+            "name": name,
+            "short_desc": short_desc,
+            "tags": [t for t in tags if t],
+            "owner_login": owner_login,
             "project_standards_enforced": standards_count,
             "flow_zone_count": flow_zone_count,
             "contributor_count": contributor_count,
@@ -160,6 +175,8 @@ def _fetch_recipes(project_key: str) -> dict:
     types_seen: set[str] = set()
     for r in recipes:
         rtype = r.get("type", "") if isinstance(r, dict) else ""
+        if not rtype:
+            continue
         types_seen.add(rtype)
         if rtype in _VISUAL_TYPES:
             counts["visual"] += 1
@@ -227,7 +244,7 @@ def _fetch_ml_tasks(project_key: str) -> dict:
                 if not analysis_key:
                     continue
                 a_handle = project.get_analysis(analysis_key)
-                for mlt in a_handle.list_ml_tasks():
+                for mlt in _retry_read(a_handle.list_ml_tasks):
                     mlt_raw = mlt if isinstance(mlt, dict) else {}
                     ml_tasks.append({
                         "name": mlt_raw.get("taskType", mlt_raw.get("name")),
@@ -510,7 +527,7 @@ def _fetch_dq_rules(project_key: str, datasets_raw: list[dict]) -> dict:
             if not name:
                 continue
             try:
-                raw = project.get_dataset(name).get_settings().get_raw()
+                raw = _retry_read(lambda: project.get_dataset(name).get_settings().get_raw())
                 # Field may be "checks", "dataQualityRules", or "monitoring.checks"
                 checks = raw.get("checks", raw.get("dataQualityRules", []))
                 if not checks and isinstance(raw.get("monitoring"), dict):
@@ -613,6 +630,11 @@ def _assemble(project_key: str, p1: dict[str, dict], p2: dict[str, dict]) -> dic
 
     result = {
         "project_key": project_key,
+        # Identity
+        "name": core.get("name"),
+        "short_desc": core.get("short_desc"),
+        "tags": core.get("tags", []),
+        "owner_login": core.get("owner_login"),
         # Timestamps
         "last_modified_on": core.get("last_modified_on"),
         "last_built_on": jobs.get("last_built_on"),
@@ -661,13 +683,28 @@ def _assemble(project_key: str, p1: dict[str, dict], p2: dict[str, dict]) -> dic
         "contributor_count": core.get("contributor_count"),
     }
 
-    # Strip internal _raw keys before returning
-    return {k: v for k, v in result.items() if not k.startswith("_")}
+    # Strip internal keys, then redact any credential values before returning
+    clean = {k: v for k, v in result.items() if not k.startswith("_")}
+    return redact(clean)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _retry_read(fn: Callable[[], Any], max_attempts: int = 3, base_delay: float = 0.5) -> Any:
+    """Retry a no-argument callable with exponential backoff. Raises on final failure.
+
+    Only use for safe, idempotent read operations.
+    """
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception:
+            if attempt == max_attempts - 1:
+                raise
+            time.sleep(base_delay * (2 ** attempt))
+
 
 def _collect(futures: dict[str, Future], phase: int, project_key: str) -> dict[str, dict]:
     """Resolve all futures; on timeout or error, return empty dict for that key."""
