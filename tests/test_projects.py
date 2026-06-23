@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dss_mcp.tools.projects import _slim, list_all_tags, list_projects
+from dss_mcp.tools.projects import _slim, count_projects, list_all_tags, list_projects
 
 
 # ---------------------------------------------------------------------------
@@ -184,3 +184,80 @@ class TestListAllTags:
             result = list_all_tags()
 
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# count_projects — mocked borrow_client + get_nodes
+# ---------------------------------------------------------------------------
+
+def _make_node(name="test-node", host="http://test-dss-host"):
+    node = MagicMock()
+    node.name = name
+    node.host = host
+    return node
+
+
+class TestCountProjects:
+    def test_returns_total_and_per_node_fields(self):
+        mock_client = MagicMock()
+        mock_client.list_project_keys.return_value = ["A", "B", "C"]
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)), \
+             patch("dss_mcp.tools.projects.get_nodes", return_value=[_make_node()]):
+            result = count_projects()
+
+        assert result["total_project_count"] == 3
+        assert len(result["nodes"]) == 1
+        node = result["nodes"][0]
+        assert node["project_count"] == 3
+        assert node["node_name"] == "test-node"
+        assert node["host"] == "http://test-dss-host"
+        assert node["status"] == "ok"
+
+    def test_empty_node_returns_zero(self):
+        mock_client = MagicMock()
+        mock_client.list_project_keys.return_value = []
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)), \
+             patch("dss_mcp.tools.projects.get_nodes", return_value=[_make_node()]):
+            result = count_projects()
+
+        assert result["total_project_count"] == 0
+        assert result["nodes"][0]["project_count"] == 0
+
+    def test_node_error_sets_status_and_zero_count(self):
+        mock_client = MagicMock()
+        mock_client.list_project_keys.side_effect = RuntimeError("unreachable")
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)), \
+             patch("dss_mcp.tools.projects.get_nodes", return_value=[_make_node()]):
+            result = count_projects()
+
+        assert result["total_project_count"] == 0
+        node = result["nodes"][0]
+        assert node["status"] == "error"
+        assert "unreachable" in node["detail"]
+        assert node["project_count"] == 0
+
+    def test_multi_node_sums_counts(self):
+        # Each call to list_project_keys returns a different list
+        call_results = [["A", "B", "C"], ["D", "E", "F", "G", "H"]]
+        mock_client = MagicMock()
+        mock_client.list_project_keys.side_effect = call_results
+        nodes = [_make_node("node1", "http://host1"), _make_node("node2", "http://host2")]
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)), \
+             patch("dss_mcp.tools.projects.get_nodes", return_value=nodes):
+            result = count_projects()
+
+        assert result["total_project_count"] == 8
+        assert len(result["nodes"]) == 2
+
+    def test_multi_node_partial_error_sums_successful(self):
+        mock_client = MagicMock()
+        mock_client.list_project_keys.side_effect = [["A", "B"], RuntimeError("down")]
+        nodes = [_make_node("ok-node", "http://ok"), _make_node("bad-node", "http://bad")]
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)), \
+             patch("dss_mcp.tools.projects.get_nodes", return_value=nodes):
+            result = count_projects()
+
+        assert result["total_project_count"] == 2
+        statuses = {n["node_name"]: n["status"] for n in result["nodes"]}
+        assert statuses["ok-node"] == "ok"
+        assert statuses["bad-node"] == "error"

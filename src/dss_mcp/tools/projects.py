@@ -30,6 +30,56 @@ def list_projects() -> list[dict] | dict:
     return all_projects
 
 
+def count_projects() -> dict:
+    """Return the total number of projects visible across all configured DSS nodes.
+
+    Calls list_project_keys() on each node — returns only project key strings,
+    making this far lighter than list_projects(). Use this to scope the inventory
+    size, confirm which nodes are reachable, and see how many projects each holds
+    before running heavier queries.
+
+    Returns a dict with:
+      - total_project_count  Grand total across all nodes
+      - nodes                Per-node list, each with: node_name, host,
+                             project_count, and status ("ok" or "error")
+    """
+    nodes = get_nodes()
+
+    def _count_for_node(node) -> dict:
+        try:
+            with borrow_client(node.name) as client:
+                keys = client.list_project_keys()
+            return {
+                "node_name": node.name,
+                "host": node.host,
+                "project_count": len(keys),
+                "status": "ok",
+            }
+        except Exception as e:
+            log.error("count_projects failed", extra={"node": node.name, "error": str(e)})
+            return {
+                "node_name": node.name,
+                "host": node.host,
+                "project_count": 0,
+                "status": "error",
+                "detail": str(e),
+            }
+
+    if len(nodes) == 1:
+        node_results = [_count_for_node(nodes[0])]
+    else:
+        node_results: list[dict] = [{}] * len(nodes)
+        with ThreadPoolExecutor(max_workers=len(nodes)) as ex:
+            futures = {ex.submit(_count_for_node, n): i for i, n in enumerate(nodes)}
+            for future in as_completed(futures):
+                node_results[futures[future]] = future.result()
+
+    return {
+        "total_project_count": sum(r.get("project_count", 0) for r in node_results),
+        "nodes": node_results,
+    }
+
+
 def list_all_tags() -> list[str] | dict:
     """Return a deduplicated, sorted list of all tags used across all projects on all nodes.
 

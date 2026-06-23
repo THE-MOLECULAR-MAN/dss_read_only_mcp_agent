@@ -44,7 +44,7 @@ from fastmcp import FastMCP
 
 from dss_mcp.logging_config import get_logger, setup_logging
 from dss_mcp.tools.node import get_node_info
-from dss_mcp.tools.projects import list_all_tags, list_projects
+from dss_mcp.tools.projects import count_projects, list_all_tags, list_projects
 from dss_mcp.tools.summary import get_project_summary
 
 setup_logging()
@@ -59,6 +59,14 @@ customer demonstrations. All operations are read-only — you cannot modify,
 build, run, or delete anything on DSS.
 
 ## Available tools
+
+### count_projects()
+Returns the total number of projects visible across all configured nodes,
+plus per-node identity (node_name and host URL) and per-node counts.
+Calls list_project_keys() — much lighter than list_projects(). Use this to:
+  - Quickly scope how many projects exist before a full list query
+  - Confirm which nodes are reachable and how many projects each holds
+  - Answer "how many projects do we have?" without loading full metadata
 
 ### get_node_info()
 Returns connectivity status and DSS version for every configured node. Call
@@ -148,6 +156,8 @@ Key fields returned and what they signal:
 
 | Situation | Tool |
 |-----------|------|
+| "How many projects do we have?" | count_projects() |
+| Confirming which nodes are up and reachable | count_projects() or get_node_info() |
 | Starting a demo search for a prospect | list_projects() → get_project_summary() |
 | User asks what tags/industries are covered | list_all_tags() |
 | User asks which nodes are connected | get_node_info() |
@@ -168,6 +178,7 @@ Key fields returned and what they signal:
 
 # Register tools by passing plain functions to mcp.tool().
 # Tool docstrings become the MCP tool descriptions visible to the LLM.
+mcp.tool()(count_projects)
 mcp.tool()(list_projects)
 mcp.tool()(get_project_summary)
 mcp.tool()(list_all_tags)
