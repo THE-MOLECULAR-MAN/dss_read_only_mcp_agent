@@ -51,20 +51,122 @@ Credentials are read from **environment variables at startup** — do not accept
 | `DSS_HOST` | Full URL of the DSS instance | `https://my-dss.example.com` |
 | `DSS_API_KEY` | Personal or service account API key | `abc123xyz` |
 
-Initialize a **single shared `DSSClient`** at module load time and reuse it across all tool calls.
+Initialize a **small, bounded pool of `DSSClient` instances** at module load time. `DSSClient` wraps `requests.Session`, which is not thread-safe — use one client per worker rather than sharing a single instance across threads.
 
 ```python
 import os
+import queue
+from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 import dataikuapi
 
-_client = dataikuapi.DSSClient(
-    host=os.environ["DSS_HOST"],
-    api_key=os.environ["DSS_API_KEY"],
-    no_check_certificate=True,  # DSS instances commonly use self-signed certs
-)
+_POOL_SIZE = 6  # conservative for read-mostly metadata queries against one DSS node
+
+def _make_client() -> dataikuapi.DSSClient:
+    return dataikuapi.DSSClient(
+        host=os.environ["DSS_HOST"],
+        api_key=os.environ["DSS_API_KEY"],
+        no_check_certificate=True,
+    )
+
+_client_pool: queue.Queue[dataikuapi.DSSClient] = queue.Queue()
+for _ in range(_POOL_SIZE):
+    _client_pool.put(_make_client())
+
+_executor = ThreadPoolExecutor(max_workers=_POOL_SIZE)
+
+@contextmanager
+def _borrow_client():
+    """Borrow a DSSClient from the pool; return it automatically when the block exits."""
+    client = _client_pool.get()
+    try:
+        yield client
+    finally:
+        _client_pool.put(client)
 ```
 
 > **Package choice**: Use `dataiku` for code running **inside** DSS (notebooks, recipes, webapps). Use `dataikuapi` for code running **outside** DSS (MCP server, local scripts, CI/CD). This MCP server always runs outside DSS — use `dataikuapi` throughout.
+
+---
+
+# Concurrency & Connection Model
+
+## Design Principles
+- Connect to **one DSS node at a time**.
+- Workload is **read-only metadata** (listing, reading settings, checking status) — not file transfers, bulk SQL, or job execution.
+- Be **polite by default**: treat DSS capacity as finite; avoid aggressive polling or bursty fan-out.
+- Optimize for **correctness, clarity, and low operational risk** — not maximum throughput.
+
+## Using the Client Pool
+All tool handlers must borrow a client from the pool rather than creating a new one per call:
+
+```python
+@mcp.tool()
+def list_projects() -> list[dict]:
+    with _borrow_client() as client:
+        return [_serialize(p) for p in client.list_projects()]
+```
+
+For `get_project_summary`, parallelize the multiple sub-calls (recipes, datasets, dashboards, etc.) by submitting each to `_executor` and collecting results with a timeout:
+
+```python
+def get_project_summary(project_key: str) -> dict:
+    futures = {
+        "recipes":    _executor.submit(_fetch_recipes, project_key),
+        "datasets":   _executor.submit(_fetch_datasets, project_key),
+        "dashboards": _executor.submit(_fetch_dashboards, project_key),
+        "jobs":       _executor.submit(_fetch_recent_jobs, project_key),
+        # ... other sub-calls
+    }
+    results = {}
+    for key, future in futures.items():
+        try:
+            results[key] = future.result(timeout=30)
+        except Exception as e:
+            results[key] = {"error": str(e)}
+    return results
+```
+
+Each helper (`_fetch_recipes`, etc.) must use `_borrow_client()` internally so it gets its own thread-safe client from the pool.
+
+## Timeouts
+Set explicit read timeouts on the underlying `requests.Session` when creating each client. This prevents a slow or hung DSS call from blocking a worker indefinitely:
+
+```python
+def _make_client() -> dataikuapi.DSSClient:
+    client = dataikuapi.DSSClient(...)
+    client._session.timeout = (10, 60)  # (connect_timeout_s, read_timeout_s)
+    return client
+```
+
+> Verify that `_session` is the correct attribute name for the underlying session in the installed `dataikuapi` version.
+
+## Retry with Exponential Backoff
+Apply retry only to **safe, idempotent read operations**. A minimal implementation:
+
+```python
+import time
+
+def _retry_read(fn, max_attempts: int = 3, base_delay: float = 1.0):
+    """Retry a no-argument callable with exponential backoff. Raises on final failure."""
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as e:
+            if attempt == max_attempts - 1:
+                raise
+            time.sleep(base_delay * (2 ** attempt))
+```
+
+If `tenacity` is already a project dependency, prefer it over a hand-rolled loop.
+
+## What to Avoid
+- Creating a new `DSSClient` inside each tool call or sub-call
+- Sharing a single `DSSClient` across multiple threads
+- `ThreadPoolExecutor` with `max_workers` above ~8 for this workload
+- Unbounded `asyncio` fan-out or one-coroutine-per-project patterns
+- Tight polling loops without backoff
+- Submitting all projects to the executor simultaneously (iterate in bounded batches instead)
 
 ---
 
