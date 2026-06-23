@@ -25,6 +25,38 @@ A good demo project also demonstrates **production quality**:
 - Descriptions filled in on the project and its datasets
 - Recently built and mostly green jobs
 
+## Demo Fitness Signals
+
+Use these to rank or filter candidates from `get_project_summary` output.
+
+### Strong positive signals
+| Signal | Condition |
+|---|---|
+| Has Jupyter notebooks | `notebook_count > 0` |
+| Datasets in a data collection | `datasets_in_data_collection > 0` |
+| Models published to model evaluation store | `model_evaluation_store_count > 0` |
+| Has a deployable bundle | `bundle_count > 0` |
+| Bundle deployed to a deployer node | `has_bundle_on_deployer == true` |
+| Has scenarios (automation) | `scenario_count > 0` |
+| Multiple contributors | `contributor_count > 1` |
+| A webapp autostarts (always-on demo) | `autostarter_webapp_count > 0` |
+| Working dashboards | `dashboard_count > 0 and total_tile_count > 0` |
+| Content shared in a Workspace | `in_workspace == true` |
+| Data quality rules in place | `pct_datasets_with_dq_rules >= 0.5` |
+| High job success rate | `recent_job_success_rate >= 0.8` |
+| Built recently | `last_built_on` within the last 90 days |
+
+### Strong negative signals (typically disqualifying)
+| Signal | Condition |
+|---|---|
+| Toy-scale project | `dataset_count < 5` or `recipe_count < 5` |
+| Code-heavy, hard to demo visually | `recipe_counts_by_category.code > recipe_counts_by_category.visual` |
+| No dashboards | `dashboard_count == 0` |
+| Never had a successful job | `recent_jobs_evaluated == 0` or `recent_job_success_rate == 0.0` |
+
+### Neutral (not an indicator of demo quality)
+- Number of tags
+
 ---
 
 # MCP Framework
@@ -270,6 +302,25 @@ Return comprehensive detail for a single project. Designed to be called **after*
 
     # --- Project Quality ---
     "project_standards_enforced": int,    # count of enabled project standards / checklists
+
+    # --- Notebooks ---
+    "notebook_count": int,                # Jupyter notebooks in the project
+
+    # --- Data Collections ---
+    "datasets_in_data_collection": int,   # count of this project's datasets that appear in any data collection
+
+    # --- Model Evaluation Store ---
+    "model_evaluation_store_count": int,  # number of model evaluation stores in the project
+
+    # --- Bundles & Deployment ---
+    "bundle_count": int,                  # number of bundles created for this project
+    "has_bundle_on_deployer": bool,       # true if any bundle has been released to a deployer node
+
+    # --- Collaboration ---
+    "contributor_count": int | None,      # distinct users who have modified this project; None if unavailable
+
+    # --- Web App Autostart ---
+    "autostarter_webapp_count": int,      # webapps configured to autostart on DSS startup
 }
 ```
 
@@ -380,6 +431,71 @@ Infer `inferred_origin` from tags and available metadata. This is a best-effort 
 | `original` | No signals match any of the above |
 | `unknown` | Metadata could not be retrieved |
 
+## Notebooks (`notebook_count`)
+```python
+notebooks = project.list_jupyter_notebooks()  # verify method name in DSS 14.x
+notebook_count = len(notebooks)
+```
+Notebooks may also be embedded within ML analyses. If `list_jupyter_notebooks()` is unavailable, look for notebooks via `project.list_analyses()` and inspect each analysis's notebook objects.
+
+## Data Collections (`datasets_in_data_collection`)
+> **Caution**: Data Collection API availability depends on DSS version and license. Verify `client.list_data_collections()` exists before calling it.
+
+If available, count how many of this project's datasets appear in any data collection:
+```python
+project_dataset_names = {d["name"] for d in project.list_datasets()}
+count = 0
+for coll in client.list_data_collections():
+    for item in coll.get_items():          # verify method name
+        if (item.get("projectKey") == project_key
+                and item.get("datasetName") in project_dataset_names):
+            count += 1
+datasets_in_data_collection = count
+```
+If the API is unavailable, return `datasets_in_data_collection: 0` without raising.
+
+## Model Evaluation Store (`model_evaluation_store_count`)
+```python
+stores = project.list_model_evaluation_stores()  # verify method name in DSS 14.x
+model_evaluation_store_count = len(stores)
+```
+If unavailable, return `0`.
+
+## Bundles & Deployer (`bundle_count`, `has_bundle_on_deployer`)
+```python
+bundles = project.list_project_bundles()   # may also be project.list_bundles() — verify
+bundle_count = len(bundles)
+```
+For `has_bundle_on_deployer`: inspect each bundle dict for a `released` or `deployedOn` field indicating it was pushed to a deployer. Alternatively, check for a `project.list_deployments()` or `client.get_deployer()` API. If the deployer API is unavailable, return `has_bundle_on_deployer: false`.
+
+## Contributors (`contributor_count`)
+Preferred source — activity log (reflects actual edits):
+```python
+timeline = project.get_activity_log()      # or project.get_timeline() — verify method name
+logins = {event.get("userLogin") for event in timeline if event.get("userLogin")}
+contributor_count = len(logins)
+```
+Fallback — permission members (reflects access rights, not actual contributions; use only if activity log is unavailable):
+```python
+raw = project.get_settings().get_raw()
+members = raw.get("permissions", [])
+contributor_count = len({m.get("group") or m.get("user") for m in members})
+```
+If neither is available, return `contributor_count: None`.
+
+## Webapp Autostart (`autostarter_webapp_count`)
+```python
+count = 0
+for wa in project.list_webapps():
+    try:
+        raw = project.get_webapp(wa["id"]).get_settings().get_raw()
+        if raw.get("autoStart", False):    # verify field name: may be "autostart" or "startOnBoot"
+            count += 1
+    except Exception:
+        pass
+autostarter_webapp_count = count
+```
+
 ---
 
 # Error Handling
@@ -431,6 +547,9 @@ Some DSS API methods return credentials (e.g., `get_basic_credential()`). Before
 `password`, `passwd`, `secret`, `apiKey`, `api_key`, `token`, `bearerToken`, `credential`, `privateKey`
 
 Apply redaction recursively to nested dicts and lists.
+
+## Project Variables
+`project.get_variables()` returns a flat dict of project-level variables. These frequently contain API keys, passwords, or connection strings stored as plain text. Apply the same field-name redaction rules to any project variable values before returning them. If surfacing variable data in a tool response, prefer returning only the variable *names* (not values) so the LLM can see what is configured without exposing credentials.
 
 ## API Key Safety
 Never log, echo, or include the value of `DSS_API_KEY` in any tool response or error message.
