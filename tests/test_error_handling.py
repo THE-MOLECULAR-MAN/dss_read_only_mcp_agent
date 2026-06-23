@@ -44,7 +44,7 @@ from dss_mcp.tools.summary import (
 
 def _make_borrow(client):
     @contextmanager
-    def _borrow():
+    def _borrow(node_name=None):
         yield client
     return _borrow
 

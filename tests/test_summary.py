@@ -152,7 +152,7 @@ class TestRetryRead:
 
 def _make_borrow(client):
     @contextmanager
-    def _borrow():
+    def _borrow(node_name=None):
         yield client
     return _borrow
 
@@ -294,72 +294,72 @@ def _make_p2():
 
 class TestAssemble:
     def test_project_key_present(self):
-        result = _assemble("MY_PROJECT", _make_p1(), _make_p2())
+        result = _assemble("MY_PROJECT", None, _make_p1(), _make_p2())
         assert result["project_key"] == "MY_PROJECT"
 
     def test_identity_fields_from_core(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["name"] == "Demo Project"
         assert result["short_desc"] == "A great demo"
         assert result["tags"] == ["ml", "retail"]
         assert result["owner_login"] == "alice"
 
     def test_timestamps(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["last_modified_on"] == 1700000000
         assert result["last_built_on"] == 1699999999
 
     def test_origin_fields(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["inferred_origin"] == "solutions_hub"
         assert result["origin_evidence"] == ["tags=['solutions']"]
 
     def test_recipe_fields(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["recipe_count"] == 10
         assert result["recipe_counts_by_category"]["visual"] == 6
         assert result["recipe_types_present"] == ["python", "shaker"]
 
     def test_dataset_fields(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["dataset_count"] == 15
         assert result["connection_types_used"] == ["S3", "SQL_SERVER"]
 
     def test_raw_keys_stripped(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         for key in result:
             assert not key.startswith("_"), f"Internal key leaked: {key}"
 
     def test_dq_rules_from_phase2(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["pct_datasets_with_dq_rules"] == 0.6
 
     def test_plugins_from_phase2(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["plugins_used"] == ["com.dataiku.myplugin"]
 
     def test_data_collections_from_phase2(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["datasets_in_data_collection"] == 3
 
     def test_job_success_rate(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["recent_job_success_rate"] == 0.9
         assert result["recent_jobs_evaluated"] == 10
 
     def test_llm_agent_fields(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["has_agents"] is True
         assert result["agent_count"] == 2
         assert result["llm_connection_names"] == ["openai-conn"]
 
     def test_workspace_fields(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["in_workspace"] is True
         assert result["workspace_names"] == ["ws-prod"]
 
     def test_empty_phase_results_produce_safe_defaults(self):
-        result = _assemble("K", {}, {})
+        result = _assemble("K", None, {}, {})
         assert result["project_key"] == "K"
         assert result["recipe_count"] == 0
         assert result["dataset_count"] == 0
@@ -371,14 +371,23 @@ class TestAssemble:
         # Insert a base64-looking value into a field; _assemble must redact it
         p1 = _make_p1()
         p1["core"]["owner_login"] = "A" * 40  # looks like a base64 credential
-        result = _assemble("K", p1, _make_p2())
+        result = _assemble("K", None, p1, _make_p2())
         assert result["owner_login"] == _REDACTED
 
     def test_contributor_count(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["contributor_count"] == 5
 
     def test_bundle_fields(self):
-        result = _assemble("K", _make_p1(), _make_p2())
+        result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["bundle_count"] == 1
         assert result["has_bundle_on_deployer"] is True
+
+    def test_node_name_none_when_not_provided(self):
+        result = _assemble("K", None, _make_p1(), _make_p2())
+        assert result["node_name"] is None
+        assert result["project_url"] is None
+
+    def test_node_name_included_when_provided(self):
+        result = _assemble("K", "my-node", _make_p1(), _make_p2())
+        assert result["node_name"] == "my-node"

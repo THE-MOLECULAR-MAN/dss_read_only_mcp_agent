@@ -12,7 +12,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any
 
-from dss_mcp.client import borrow_client, executor
+from dss_mcp.client import borrow_client, executor, get_nodes, project_url as make_project_url
 from dss_mcp.logging_config import get_logger
 from dss_mcp.security import redact
 
@@ -49,31 +49,40 @@ _DQ_CHECK_LIMIT = 50
 # Public tool function
 # ---------------------------------------------------------------------------
 
-def get_project_summary(project_key: str) -> dict:
+def get_project_summary(project_key: str, node_name: str | None = None) -> dict:
     """Return comprehensive detail for a single project by project_key.
+
+    node_name identifies which DSS node to query. It must match a value returned
+    in the node_name field from list_projects(). When only one node is configured
+    this parameter can be omitted.
 
     Makes multiple parallel API calls. Call this only after list_projects()
     has identified specific candidates — do not call in a loop over all projects.
     """
     try:
-        log.info("get_project_summary started", extra={"project_key": project_key})
+        # Default to first node when not specified (single-node backward compat)
+        if node_name is None:
+            node_name = get_nodes()[0].name
+
+        log.info("get_project_summary started", extra={
+            "project_key": project_key, "node": node_name})
         start = time.monotonic()
 
         # --- Phase 1: independent fetches ---
         p1_futures: dict[str, Future] = {
-            "core":        executor.submit(_fetch_core, project_key),
-            "recipes":     executor.submit(_fetch_recipes, project_key),
-            "datasets":    executor.submit(_fetch_datasets, project_key),
-            "ml_tasks":    executor.submit(_fetch_ml_tasks, project_key),
-            "dashboards":  executor.submit(_fetch_dashboards, project_key),
-            "webapps":     executor.submit(_fetch_webapps, project_key),
-            "scenarios":   executor.submit(_fetch_scenarios, project_key),
-            "jobs":        executor.submit(_fetch_jobs, project_key),
-            "notebooks":   executor.submit(_fetch_notebooks, project_key),
-            "eval_stores": executor.submit(_fetch_eval_stores, project_key),
-            "bundles":     executor.submit(_fetch_bundles, project_key),
-            "workspaces":  executor.submit(_fetch_workspaces, project_key),
-            "llm_agents":  executor.submit(_fetch_llm_agents, project_key),
+            "core":        executor.submit(_fetch_core, project_key, node_name),
+            "recipes":     executor.submit(_fetch_recipes, project_key, node_name),
+            "datasets":    executor.submit(_fetch_datasets, project_key, node_name),
+            "ml_tasks":    executor.submit(_fetch_ml_tasks, project_key, node_name),
+            "dashboards":  executor.submit(_fetch_dashboards, project_key, node_name),
+            "webapps":     executor.submit(_fetch_webapps, project_key, node_name),
+            "scenarios":   executor.submit(_fetch_scenarios, project_key, node_name),
+            "jobs":        executor.submit(_fetch_jobs, project_key, node_name),
+            "notebooks":   executor.submit(_fetch_notebooks, project_key, node_name),
+            "eval_stores": executor.submit(_fetch_eval_stores, project_key, node_name),
+            "bundles":     executor.submit(_fetch_bundles, project_key, node_name),
+            "workspaces":  executor.submit(_fetch_workspaces, project_key, node_name),
+            "llm_agents":  executor.submit(_fetch_llm_agents, project_key, node_name),
         }
         p1 = _collect(p1_futures, phase=1, project_key=project_key)
 
@@ -82,19 +91,18 @@ def get_project_summary(project_key: str) -> dict:
         recipes_raw: list[dict] = p1.get("recipes", {}).get("_raw", [])
 
         p2_futures: dict[str, Future] = {
-            "dq_rules":         executor.submit(_fetch_dq_rules, project_key, datasets_raw),
-            "plugins":          executor.submit(_fetch_plugins, project_key, recipes_raw, datasets_raw),
-            "data_collections": executor.submit(_fetch_data_collections, project_key, datasets_raw),
+            "dq_rules":         executor.submit(_fetch_dq_rules, project_key, datasets_raw, node_name),
+            "plugins":          executor.submit(_fetch_plugins, project_key, recipes_raw, datasets_raw, node_name),
+            "data_collections": executor.submit(_fetch_data_collections, project_key, datasets_raw, node_name),
         }
         p2 = _collect(p2_futures, phase=2, project_key=project_key)
 
         elapsed = round(time.monotonic() - start, 2)
         log.info("get_project_summary completed", extra={
-            "project_key": project_key,
-            "elapsed_s": elapsed,
+            "project_key": project_key, "node": node_name, "elapsed_s": elapsed,
         })
 
-        return _assemble(project_key, p1, p2)
+        return _assemble(project_key, node_name, p1, p2)
 
     except Exception as e:
         log.error("get_project_summary failed", extra={"project_key": project_key, "error": str(e)})
@@ -105,9 +113,9 @@ def get_project_summary(project_key: str) -> dict:
 # Phase 1 sub-fetchers
 # ---------------------------------------------------------------------------
 
-def _fetch_core(project_key: str) -> dict:
+def _fetch_core(project_key: str, node_name: str | None = None) -> dict:
     """Fetch project settings (standards, zones, origin) and timeline (contributors)."""
-    with borrow_client() as client:
+    with borrow_client(node_name) as client:
         project = client.get_project(project_key)
 
         # --- Settings ---
@@ -161,8 +169,8 @@ def _fetch_core(project_key: str) -> dict:
         }
 
 
-def _fetch_recipes(project_key: str) -> dict:
-    with borrow_client() as client:
+def _fetch_recipes(project_key: str, node_name: str | None = None) -> dict:
+    with borrow_client(node_name) as client:
         project = client.get_project(project_key)
         try:
             recipes = project.list_recipes()
@@ -195,8 +203,8 @@ def _fetch_recipes(project_key: str) -> dict:
     }
 
 
-def _fetch_datasets(project_key: str) -> dict:
-    with borrow_client() as client:
+def _fetch_datasets(project_key: str, node_name: str | None = None) -> dict:
+    with borrow_client(node_name) as client:
         project = client.get_project(project_key)
         try:
             datasets = project.list_datasets()
@@ -228,8 +236,8 @@ def _fetch_datasets(project_key: str) -> dict:
     }
 
 
-def _fetch_ml_tasks(project_key: str) -> dict:
-    with borrow_client() as client:
+def _fetch_ml_tasks(project_key: str, node_name: str | None = None) -> dict:
+    with borrow_client(node_name) as client:
         project = client.get_project(project_key)
         ml_tasks: list[dict] = []
         try:
@@ -258,8 +266,8 @@ def _fetch_ml_tasks(project_key: str) -> dict:
     return {"ml_task_count": len(ml_tasks), "ml_tasks": ml_tasks}
 
 
-def _fetch_dashboards(project_key: str) -> dict:
-    with borrow_client() as client:
+def _fetch_dashboards(project_key: str, node_name: str | None = None) -> dict:
+    with borrow_client(node_name) as client:
         project = client.get_project(project_key)
         try:
             dashboards = project.list_dashboards()
@@ -283,8 +291,8 @@ def _fetch_dashboards(project_key: str) -> dict:
     return {"dashboard_count": len(dashboards), "total_tile_count": total_tiles}
 
 
-def _fetch_webapps(project_key: str) -> dict:
-    with borrow_client() as client:
+def _fetch_webapps(project_key: str, node_name: str | None = None) -> dict:
+    with borrow_client(node_name) as client:
         project = client.get_project(project_key)
         try:
             webapps = project.list_webapps()
@@ -316,8 +324,8 @@ def _fetch_webapps(project_key: str) -> dict:
     }
 
 
-def _fetch_scenarios(project_key: str) -> dict:
-    with borrow_client() as client:
+def _fetch_scenarios(project_key: str, node_name: str | None = None) -> dict:
+    with borrow_client(node_name) as client:
         project = client.get_project(project_key)
         try:
             scenarios = project.list_scenarios()
@@ -327,8 +335,8 @@ def _fetch_scenarios(project_key: str) -> dict:
             return {"scenario_count": 0}
 
 
-def _fetch_jobs(project_key: str) -> dict:
-    with borrow_client() as client:
+def _fetch_jobs(project_key: str, node_name: str | None = None) -> dict:
+    with borrow_client(node_name) as client:
         project = client.get_project(project_key)
         try:
             jobs = project.list_jobs(active=False, limit=10)
@@ -354,8 +362,8 @@ def _fetch_jobs(project_key: str) -> dict:
     }
 
 
-def _fetch_notebooks(project_key: str) -> dict:
-    with borrow_client() as client:
+def _fetch_notebooks(project_key: str, node_name: str | None = None) -> dict:
+    with borrow_client(node_name) as client:
         project = client.get_project(project_key)
         try:
             # Method name verified for DSS 14.x; may also be list_notebooks()
@@ -374,8 +382,8 @@ def _fetch_notebooks(project_key: str) -> dict:
             return {"notebook_count": 0}
 
 
-def _fetch_eval_stores(project_key: str) -> dict:
-    with borrow_client() as client:
+def _fetch_eval_stores(project_key: str, node_name: str | None = None) -> dict:
+    with borrow_client(node_name) as client:
         project = client.get_project(project_key)
         try:
             stores = project.list_model_evaluation_stores()
@@ -386,8 +394,8 @@ def _fetch_eval_stores(project_key: str) -> dict:
             return {"model_evaluation_store_count": 0}
 
 
-def _fetch_bundles(project_key: str) -> dict:
-    with borrow_client() as client:
+def _fetch_bundles(project_key: str, node_name: str | None = None) -> dict:
+    with borrow_client(node_name) as client:
         project = client.get_project(project_key)
         try:
             # Method may also be project.list_bundles() — verify for DSS 14.x
@@ -411,9 +419,9 @@ def _fetch_bundles(project_key: str) -> dict:
         return {"bundle_count": len(bundles), "has_bundle_on_deployer": has_deployer}
 
 
-def _fetch_workspaces(project_key: str) -> dict:
+def _fetch_workspaces(project_key: str, node_name: str | None = None) -> dict:
     """Check if any Dataiku Workspace references this project's content."""
-    with borrow_client() as client:
+    with borrow_client(node_name) as client:
         try:
             workspaces = client.list_workspaces()
         except AttributeError:
@@ -442,14 +450,14 @@ def _fetch_workspaces(project_key: str) -> dict:
     return {"in_workspace": bool(matched), "workspace_names": matched}
 
 
-def _fetch_llm_agents(project_key: str) -> dict:
+def _fetch_llm_agents(project_key: str, node_name: str | None = None) -> dict:
     """Fetch LLM connection usage and agent presence.
 
     The agent API surface in DSS 14.x is still evolving. Approach:
     - Check project settings for LLM configuration blocks
     - Look for agent-type flow objects or dedicated list methods if available
     """
-    with borrow_client() as client:
+    with borrow_client(node_name) as client:
         project = client.get_project(project_key)
 
         llm_connections: list[str] = []
@@ -509,7 +517,7 @@ def _fetch_llm_agents(project_key: str) -> dict:
 # Phase 2 sub-fetchers (depend on Phase 1 results)
 # ---------------------------------------------------------------------------
 
-def _fetch_dq_rules(project_key: str, datasets_raw: list[dict]) -> dict:
+def _fetch_dq_rules(project_key: str, datasets_raw: list[dict], node_name: str | None = None) -> dict:
     """Count fraction of datasets that have ≥1 data quality rule.
 
     Capped at _DQ_CHECK_LIMIT datasets to bound API calls.
@@ -520,7 +528,7 @@ def _fetch_dq_rules(project_key: str, datasets_raw: list[dict]) -> dict:
     to_check = datasets_raw[:_DQ_CHECK_LIMIT]
     has_rules_count = 0
 
-    with borrow_client() as client:
+    with borrow_client(node_name) as client:
         project = client.get_project(project_key)
         for d in to_check:
             name = d.get("name") if isinstance(d, dict) else None
@@ -545,7 +553,7 @@ def _fetch_dq_rules(project_key: str, datasets_raw: list[dict]) -> dict:
     }
 
 
-def _fetch_plugins(project_key: str, recipes_raw: list[dict], datasets_raw: list[dict]) -> dict:
+def _fetch_plugins(project_key: str, recipes_raw: list[dict], datasets_raw: list[dict], node_name: str | None = None) -> dict:
     """Collect plugin IDs referenced by recipes or dataset types in this project."""
     plugin_ids: set[str] = set()
 
@@ -559,7 +567,7 @@ def _fetch_plugins(project_key: str, recipes_raw: list[dict], datasets_raw: list
                 plugin_ids.add(parts[0])
 
     # Plugin datasets: cross-reference dataset types with installed plugins
-    with borrow_client() as client:
+    with borrow_client(node_name) as client:
         try:
             installed = {p.get("id") for p in client.list_plugins() if isinstance(p, dict)}
         except Exception as e:
@@ -580,7 +588,7 @@ def _fetch_plugins(project_key: str, recipes_raw: list[dict], datasets_raw: list
     return {"plugins_used": sorted(plugin_ids)}
 
 
-def _fetch_data_collections(project_key: str, datasets_raw: list[dict]) -> dict:
+def _fetch_data_collections(project_key: str, datasets_raw: list[dict], node_name: str | None = None) -> dict:
     """Count how many of this project's datasets appear in any data collection."""
     project_dataset_names = {
         d.get("name") for d in datasets_raw if isinstance(d, dict) and d.get("name")
@@ -589,7 +597,7 @@ def _fetch_data_collections(project_key: str, datasets_raw: list[dict]) -> dict:
         return {"datasets_in_data_collection": 0}
 
     count = 0
-    with borrow_client() as client:
+    with borrow_client(node_name) as client:
         try:
             collections = client.list_data_collections()
         except AttributeError:
@@ -621,7 +629,7 @@ def _fetch_data_collections(project_key: str, datasets_raw: list[dict]) -> dict:
 # Assembly
 # ---------------------------------------------------------------------------
 
-def _assemble(project_key: str, p1: dict[str, dict], p2: dict[str, dict]) -> dict:
+def _assemble(project_key: str, node_name: str | None, p1: dict[str, dict], p2: dict[str, dict]) -> dict:
     """Merge phase results into the final get_project_summary response dict."""
     core = p1.get("core", {})
     recipes = p1.get("recipes", {})
@@ -630,6 +638,8 @@ def _assemble(project_key: str, p1: dict[str, dict], p2: dict[str, dict]) -> dic
 
     result = {
         "project_key": project_key,
+        "node_name": node_name,
+        "project_url": make_project_url(node_name, project_key) if node_name else None,
         # Identity
         "name": core.get("name"),
         "short_desc": core.get("short_desc"),

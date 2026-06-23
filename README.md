@@ -168,6 +168,31 @@ Save the file (`Cmd + S`) and close TextEdit.
 
 ---
 
+## (Optional) Connecting to multiple DSS nodes
+
+If you have access to more than one DSS design node (for example, a regional demo instance plus a solutions-hub instance), you can connect Claude to all of them at once. Claude will search all nodes in parallel and return results that include a direct link to each project on the correct instance.
+
+Instead of the `DSS_HOST` / `DSS_API_KEY` keys, use numbered keys for each node. You can add up to 19 nodes:
+
+```json
+"env": {
+  "DSS_NODE_1_HOST": "https://acme-design.dataiku-sandbox.io",
+  "DSS_NODE_1_KEY":  "dkuaps-aBcDeFgHiJkLmNoPqRsTuVwXyZ",
+  "DSS_NODE_1_NAME": "acme-design",
+  "DSS_NODE_2_HOST": "https://solutions.dataiku-sandbox.io",
+  "DSS_NODE_2_KEY":  "dkuaps-ZyXwVuTsRqPoNmLkJiHgFeDcBaZy",
+  "DSS_NODE_2_NAME": "solutions-hub"
+}
+```
+
+`DSS_NODE_N_NAME` is optional — if omitted, the name is derived from the hostname automatically.
+
+Each DSS instance has its own API key. Follow Step 3 on each instance to generate the right key for that node.
+
+> **Important:** do not mix `DSS_HOST`/`DSS_API_KEY` with `DSS_NODE_N_*` keys in the same config block. Use one format or the other.
+
+---
+
 ## Step 5 — Start Claude Desktop and verify
 
 Open Claude Desktop. Look for the **MCP tools icon** (a hammer or plug icon) in the chat input bar. Click it — you should see `dss-demo-finder` listed with four tools: `list_projects`, `get_project_summary`, `list_all_tags`, and `get_node_info`.
