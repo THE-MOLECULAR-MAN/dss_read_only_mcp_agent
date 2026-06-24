@@ -23,18 +23,15 @@ from dss_mcp.tools.summary import (
     _fetch_bundles,
     _fetch_core,
     _fetch_dashboards,
-    _fetch_data_collections,
     _fetch_datasets,
     _fetch_dq_rules,
     _fetch_eval_stores,
     _fetch_jobs,
     _fetch_llm_agents,
     _fetch_ml_tasks,
-    _fetch_notebooks,
     _fetch_plugins,
     _fetch_scenarios,
     _fetch_webapps,
-    _fetch_workspaces,
 )
 
 
@@ -267,35 +264,6 @@ class TestFetchJobsErrors:
 
 
 # ---------------------------------------------------------------------------
-# _fetch_notebooks
-# ---------------------------------------------------------------------------
-
-class TestFetchNotebooksErrors:
-    def test_list_jupyter_notebooks_attribute_error_falls_back_to_list_notebooks(self):
-        client, project = _mock_client()
-        project.list_jupyter_notebooks.side_effect = AttributeError("no such method")
-        project.list_notebooks.return_value = [MagicMock(), MagicMock()]
-        with patch("dss_mcp.tools.summary.borrow_client", _make_borrow(client)):
-            result = _fetch_notebooks("MY_PROJECT")
-        assert result["notebook_count"] == 2
-
-    def test_both_notebook_methods_fail_returns_zero(self):
-        client, project = _mock_client()
-        project.list_jupyter_notebooks.side_effect = AttributeError("missing")
-        project.list_notebooks.side_effect = RuntimeError("also broken")
-        with patch("dss_mcp.tools.summary.borrow_client", _make_borrow(client)):
-            result = _fetch_notebooks("BAD_PROJECT")
-        assert result["notebook_count"] == 0
-
-    def test_list_jupyter_notebooks_non_attribute_error_returns_zero(self):
-        client, project = _mock_client()
-        project.list_jupyter_notebooks.side_effect = RuntimeError("kernel error")
-        with patch("dss_mcp.tools.summary.borrow_client", _make_borrow(client)):
-            result = _fetch_notebooks("BAD_PROJECT")
-        assert result["notebook_count"] == 0
-
-
-# ---------------------------------------------------------------------------
 # _fetch_eval_stores
 # ---------------------------------------------------------------------------
 
@@ -337,48 +305,6 @@ class TestFetchBundlesErrors:
             result = _fetch_bundles("BAD_PROJECT")
         assert result["bundle_count"] == 0
         assert result["has_bundle_on_deployer"] is False
-
-
-# ---------------------------------------------------------------------------
-# _fetch_workspaces
-# ---------------------------------------------------------------------------
-
-class TestFetchWorkspacesErrors:
-    def test_list_workspaces_attribute_error_returns_not_in_workspace(self):
-        client = MagicMock()
-        client.list_workspaces.side_effect = AttributeError("no workspace support")
-        with patch("dss_mcp.tools.summary.borrow_client", _make_borrow(client)):
-            result = _fetch_workspaces("MY_PROJECT")
-        assert result["in_workspace"] is False
-        assert result["workspace_names"] == []
-
-    def test_list_workspaces_general_failure_returns_not_in_workspace(self):
-        client = MagicMock()
-        client.list_workspaces.side_effect = RuntimeError("workspace API down")
-        with patch("dss_mcp.tools.summary.borrow_client", _make_borrow(client)):
-            result = _fetch_workspaces("MY_PROJECT")
-        assert result["in_workspace"] is False
-
-    def test_individual_workspace_item_check_failure_skips_and_continues(self):
-        client = MagicMock()
-        # Two workspaces: bad one raises, good one contains our project
-        client.list_workspaces.return_value = [
-            {"name": "ws-bad", "workspaceKey": "WS_BAD"},
-            {"name": "ws-good", "workspaceKey": "WS_GOOD"},
-        ]
-        bad_ws = MagicMock()
-        bad_ws.list_objects.side_effect = RuntimeError("workspace corrupt")
-
-        good_ws = MagicMock()
-        good_ws.list_objects.return_value = [{"projectKey": "MY_PROJECT"}]
-
-        client.get_workspace.side_effect = lambda key: (
-            bad_ws if key == "WS_BAD" else good_ws
-        )
-        with patch("dss_mcp.tools.summary.borrow_client", _make_borrow(client)):
-            result = _fetch_workspaces("MY_PROJECT")
-        assert result["in_workspace"] is True
-        assert result["workspace_names"] == ["ws-good"]
 
 
 # ---------------------------------------------------------------------------
@@ -520,43 +446,3 @@ class TestFetchPluginsErrors:
         assert result["plugins_used"] == []
 
 
-# ---------------------------------------------------------------------------
-# _fetch_data_collections (Phase 2)
-# ---------------------------------------------------------------------------
-
-class TestFetchDataCollectionsErrors:
-    def test_list_data_collections_attribute_error_returns_zero(self):
-        client = MagicMock()
-        client.list_data_collections.side_effect = AttributeError("not available")
-        datasets_raw = [{"name": "ds1"}]
-        with patch("dss_mcp.tools.summary.borrow_client", _make_borrow(client)):
-            result = _fetch_data_collections("MY_PROJECT", datasets_raw)
-        assert result["datasets_in_data_collection"] == 0
-
-    def test_list_data_collections_general_failure_returns_zero(self):
-        client = MagicMock()
-        client.list_data_collections.side_effect = RuntimeError("collections unavailable")
-        datasets_raw = [{"name": "ds1"}]
-        with patch("dss_mcp.tools.summary.borrow_client", _make_borrow(client)):
-            result = _fetch_data_collections("MY_PROJECT", datasets_raw)
-        assert result["datasets_in_data_collection"] == 0
-
-    def test_individual_collection_item_check_failure_skips_and_continues(self):
-        client = MagicMock()
-        client.list_data_collections.return_value = [{"id": "c_bad"}, {"id": "c_good"}]
-
-        bad_coll = MagicMock()
-        bad_coll.get_items.side_effect = RuntimeError("collection corrupt")
-
-        good_coll = MagicMock()
-        good_coll.get_items.return_value = [
-            {"projectKey": "MY_PROJECT", "datasetName": "ds1"},
-        ]
-
-        client.get_data_collection.side_effect = lambda cid: (
-            bad_coll if cid == "c_bad" else good_coll
-        )
-        datasets_raw = [{"name": "ds1"}]
-        with patch("dss_mcp.tools.summary.borrow_client", _make_borrow(client)):
-            result = _fetch_data_collections("MY_PROJECT", datasets_raw)
-        assert result["datasets_in_data_collection"] == 1

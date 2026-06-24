@@ -103,7 +103,7 @@ Key fields returned and what they signal:
   - webapp_count / autostarter_webapp_count  Live interactive UI ready to show
   - recent_job_success_rate (0–1.0)      ≥ 0.8 = data pipeline is reliable
   - last_built_on (epoch ms)             Recency — recently built = maintained
-  - bundle_count / has_bundle_on_deployer  Deployment story available
+  - has_bundle_on_deployer               True = deployment story already exists
 
   AI / GEN AI CAPABILITY
   - has_agents / agent_count             Project uses DSS Agents
@@ -114,13 +114,12 @@ Key fields returned and what they signal:
   - inferred_origin                      "solutions_hub" = Dataiku-vetted and polished;
                                          "tutorial" = good for learning demos;
                                          "original" = custom-built
-  - project_standards_enforced           Number of active project standards checks
   - contributor_count                    Actively maintained if > 1
 
   TECHNICAL PROFILE
   - connection_types_used                Data sources (S3, Snowflake, etc.)
   - recipe_counts_by_category            visual / code / prompt_llm / plugin
-  - ml_task_count / ml_tasks             ML models present
+  - ml_task_count                        Number of ML models present
   - pct_datasets_with_dq_rules           Data quality discipline (0–1.0)
   - plugins_used                         Third-party integrations
 

@@ -123,10 +123,71 @@ def _list_for_node(node_name: str) -> list[dict] | dict:
     try:
         with borrow_client(node_name) as client:
             projects = client.list_projects()
-        return [_slim(p, node_name) for p in projects]
     except Exception as e:
         log.error("list_projects failed", extra={"node": node_name, "error": str(e)})
         return {"error": "list_projects_failed", "node": node_name, "detail": str(e)}
+
+    # Free filter: projects with ≤2 version commits are empty/stub projects
+    candidates = [p for p in projects if _sufficient_commits(p)]
+
+    # Parallel filter: at least 2 datasets, 2 recipes, and 1 job ever run
+    viable_keys: set[str] = set()
+    if candidates:
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            futures = {
+                ex.submit(_is_viable_demo, p.get("projectKey"), node_name): p.get("projectKey")
+                for p in candidates
+                if p.get("projectKey")
+            }
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    if future.result():
+                        viable_keys.add(key)
+                except Exception:
+                    viable_keys.add(key)  # fail-open on executor error
+
+    return [_slim(p, node_name) for p in candidates if p.get("projectKey") in viable_keys]
+
+
+def _sufficient_commits(p: dict) -> bool:
+    """Return True if the project has more than 2 version commits (or version info is absent)."""
+    vt = p.get("versionTag")
+    if not isinstance(vt, dict):
+        return True
+    version_number = vt.get("versionNumber")
+    if version_number is None:
+        return True
+    return int(version_number) > 2
+
+
+def _is_viable_demo(project_key: str, node_name: str) -> bool:
+    """Return True if the project meets minimum dataset, recipe, and job thresholds.
+
+    Thresholds: ≥2 datasets, ≥2 recipes, at least 1 job ever run.
+    Returns True on any API error so a single bad API call never silently drops a project.
+    """
+    try:
+        with borrow_client(node_name) as client:
+            project = client.get_project(project_key)
+            try:
+                if len(project.list_datasets()) < 2:
+                    return False
+            except Exception:
+                pass
+            try:
+                if len(project.list_recipes()) < 2:
+                    return False
+            except Exception:
+                pass
+            try:
+                if not project.list_jobs(active=False, limit=1):
+                    return False
+            except Exception:
+                pass
+        return True
+    except Exception:
+        return True  # fail-open: include the project if we can't borrow a client
 
 
 def _slim(p: dict, node_name: str) -> dict:

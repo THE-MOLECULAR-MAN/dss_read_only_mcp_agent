@@ -78,10 +78,8 @@ def get_project_summary(project_key: str, node_name: str | None = None) -> dict:
             "webapps":     executor.submit(_fetch_webapps, project_key, node_name),
             "scenarios":   executor.submit(_fetch_scenarios, project_key, node_name),
             "jobs":        executor.submit(_fetch_jobs, project_key, node_name),
-            "notebooks":   executor.submit(_fetch_notebooks, project_key, node_name),
             "eval_stores": executor.submit(_fetch_eval_stores, project_key, node_name),
             "bundles":     executor.submit(_fetch_bundles, project_key, node_name),
-            "workspaces":  executor.submit(_fetch_workspaces, project_key, node_name),
             "llm_agents":  executor.submit(_fetch_llm_agents, project_key, node_name),
         }
         p1 = _collect(p1_futures, phase=1, project_key=project_key)
@@ -91,9 +89,8 @@ def get_project_summary(project_key: str, node_name: str | None = None) -> dict:
         recipes_raw: list[dict] = p1.get("recipes", {}).get("_raw", [])
 
         p2_futures: dict[str, Future] = {
-            "dq_rules":         executor.submit(_fetch_dq_rules, project_key, datasets_raw, node_name),
-            "plugins":          executor.submit(_fetch_plugins, project_key, recipes_raw, datasets_raw, node_name),
-            "data_collections": executor.submit(_fetch_data_collections, project_key, datasets_raw, node_name),
+            "dq_rules": executor.submit(_fetch_dq_rules, project_key, datasets_raw, node_name),
+            "plugins":  executor.submit(_fetch_plugins, project_key, recipes_raw, datasets_raw, node_name),
         }
         p2 = _collect(p2_futures, phase=2, project_key=project_key)
 
@@ -362,26 +359,6 @@ def _fetch_jobs(project_key: str, node_name: str | None = None) -> dict:
     }
 
 
-def _fetch_notebooks(project_key: str, node_name: str | None = None) -> dict:
-    with borrow_client(node_name) as client:
-        project = client.get_project(project_key)
-        try:
-            # Method name verified for DSS 14.x; may also be list_notebooks()
-            notebooks = project.list_jupyter_notebooks()
-            return {"notebook_count": len(notebooks)}
-        except AttributeError:
-            # Try alternate method name if first is unavailable
-            try:
-                notebooks = project.list_notebooks()
-                return {"notebook_count": len(notebooks)}
-            except Exception as e:
-                log.warning("list_notebooks unavailable", extra={"project_key": project_key, "error": str(e)})
-                return {"notebook_count": 0}
-        except Exception as e:
-            log.warning("list_jupyter_notebooks failed", extra={"project_key": project_key, "error": str(e)})
-            return {"notebook_count": 0}
-
-
 def _fetch_eval_stores(project_key: str, node_name: str | None = None) -> dict:
     with borrow_client(node_name) as client:
         project = client.get_project(project_key)
@@ -419,37 +396,6 @@ def _fetch_bundles(project_key: str, node_name: str | None = None) -> dict:
         return {"bundle_count": len(bundles), "has_bundle_on_deployer": has_deployer}
 
 
-def _fetch_workspaces(project_key: str, node_name: str | None = None) -> dict:
-    """Check if any Dataiku Workspace references this project's content."""
-    with borrow_client(node_name) as client:
-        try:
-            workspaces = client.list_workspaces()
-        except AttributeError:
-            log.info("list_workspaces not available on this node/version")
-            return {"in_workspace": False, "workspace_names": []}
-        except Exception as e:
-            log.warning("list_workspaces failed", extra={"project_key": project_key, "error": str(e)})
-            return {"in_workspace": False, "workspace_names": []}
-
-        matched: list[str] = []
-        for ws in workspaces:
-            try:
-                ws_name = ws.get("name") if isinstance(ws, dict) else None
-                ws_key = ws.get("workspaceKey") if isinstance(ws, dict) else None
-                # Try to list content items and look for this project's content
-                ws_handle = client.get_workspace(ws_key)
-                items = ws_handle.list_objects()  # verify method name
-                for item in items:
-                    if isinstance(item, dict) and item.get("projectKey") == project_key:
-                        if ws_name:
-                            matched.append(ws_name)
-                        break
-            except Exception as e:
-                log.warning("workspace item check failed", extra={"error": str(e)})
-
-    return {"in_workspace": bool(matched), "workspace_names": matched}
-
-
 def _fetch_llm_agents(project_key: str, node_name: str | None = None) -> dict:
     """Fetch LLM connection usage and agent presence.
 
@@ -463,8 +409,6 @@ def _fetch_llm_agents(project_key: str, node_name: str | None = None) -> dict:
         llm_connections: list[str] = []
         has_agents = False
         agent_count = 0
-        has_agent_tools = False
-        has_agent_hub = False
 
         # Attempt 1: dedicated LLM config listing
         try:
@@ -508,8 +452,6 @@ def _fetch_llm_agents(project_key: str, node_name: str | None = None) -> dict:
         "llm_connection_names": llm_connections,
         "has_agents": has_agents,
         "agent_count": agent_count,
-        "has_agent_tools": has_agent_tools,
-        "has_agent_hub": has_agent_hub,
     }
 
 
@@ -588,43 +530,6 @@ def _fetch_plugins(project_key: str, recipes_raw: list[dict], datasets_raw: list
     return {"plugins_used": sorted(plugin_ids)}
 
 
-def _fetch_data_collections(project_key: str, datasets_raw: list[dict], node_name: str | None = None) -> dict:
-    """Count how many of this project's datasets appear in any data collection."""
-    project_dataset_names = {
-        d.get("name") for d in datasets_raw if isinstance(d, dict) and d.get("name")
-    }
-    if not project_dataset_names:
-        return {"datasets_in_data_collection": 0}
-
-    count = 0
-    with borrow_client(node_name) as client:
-        try:
-            collections = client.list_data_collections()
-        except AttributeError:
-            log.info("list_data_collections not available on this node/version")
-            return {"datasets_in_data_collection": 0}
-        except Exception as e:
-            log.warning("list_data_collections failed", extra={"project_key": project_key, "error": str(e)})
-            return {"datasets_in_data_collection": 0}
-
-        for coll in collections:
-            try:
-                coll_id = coll.get("id") if isinstance(coll, dict) else None
-                if not coll_id:
-                    continue
-                coll_handle = client.get_data_collection(coll_id)
-                items = coll_handle.get_items()  # verify method name for DSS 14.x
-                for item in items:
-                    if (isinstance(item, dict)
-                            and item.get("projectKey") == project_key
-                            and item.get("datasetName") in project_dataset_names):
-                        count += 1
-            except Exception as e:
-                log.warning("data collection item check failed", extra={"error": str(e)})
-
-    return {"datasets_in_data_collection": count}
-
-
 # ---------------------------------------------------------------------------
 # Assembly
 # ---------------------------------------------------------------------------
@@ -635,6 +540,10 @@ def _assemble(project_key: str, node_name: str | None, p1: dict[str, dict], p2: 
     recipes = p1.get("recipes", {})
     datasets = p1.get("datasets", {})
     jobs = p1.get("jobs", {})
+    llm_agents = p1.get("llm_agents", {})
+    webapps = p1.get("webapps", {})
+    bundles = p1.get("bundles", {})
+    ml_tasks = p1.get("ml_tasks", {})
 
     result = {
         "project_key": project_key,
@@ -644,51 +553,40 @@ def _assemble(project_key: str, node_name: str | None, p1: dict[str, dict], p2: 
         "name": core.get("name"),
         "short_desc": core.get("short_desc"),
         "tags": core.get("tags", []),
-        "owner_login": core.get("owner_login"),
         # Timestamps
         "last_modified_on": core.get("last_modified_on"),
         "last_built_on": jobs.get("last_built_on"),
         # Origin
         "inferred_origin": core.get("inferred_origin", "unknown"),
-        "origin_evidence": core.get("origin_evidence", []),
         # Recipes
         "recipe_count": recipes.get("recipe_count", 0),
         "recipe_counts_by_category": recipes.get("recipe_counts_by_category", _empty_recipe_counts()),
-        "recipe_types_present": recipes.get("recipe_types_present", []),
         # Datasets & connections
         "dataset_count": datasets.get("dataset_count", 0),
         "connection_types_used": datasets.get("connection_types_used", []),
-        "connection_names_used": datasets.get("connection_names_used", []),
         "pct_datasets_with_dq_rules": p2.get("dq_rules", {}).get("pct_datasets_with_dq_rules"),
         # AI / LLM / Agents
-        **p1.get("llm_agents", {}),
+        "llm_connection_names": llm_agents.get("llm_connection_names", []),
+        "has_agents": llm_agents.get("has_agents", False),
+        "agent_count": llm_agents.get("agent_count", 0),
         # Dashboards
         **p1.get("dashboards", {}),
-        # Workspaces
-        **p1.get("workspaces", {}),
-        # Web apps
-        **p1.get("webapps", {}),
+        # Web apps (webapp_types omitted — counts are sufficient)
+        "webapp_count": webapps.get("webapp_count", 0),
+        "autostarter_webapp_count": webapps.get("autostarter_webapp_count", 0),
         # Plugins
         "plugins_used": p2.get("plugins", {}).get("plugins_used", []),
         # Automation
         **p1.get("scenarios", {}),
-        # Flow
-        "flow_zone_count": core.get("flow_zone_count", 0),
         # ML
-        **p1.get("ml_tasks", {}),
+        "ml_task_count": ml_tasks.get("ml_task_count", 0),
         # Jobs
         "recent_job_success_rate": jobs.get("recent_job_success_rate"),
         "recent_jobs_evaluated": jobs.get("recent_jobs_evaluated", 0),
-        # Project quality
-        "project_standards_enforced": core.get("project_standards_enforced", 0),
-        # Notebooks
-        **p1.get("notebooks", {}),
-        # Data collections
-        "datasets_in_data_collection": p2.get("data_collections", {}).get("datasets_in_data_collection", 0),
         # Model evaluation stores
         **p1.get("eval_stores", {}),
-        # Bundles
-        **p1.get("bundles", {}),
+        # Bundles (bundle_count omitted — has_bundle_on_deployer is the meaningful signal)
+        "has_bundle_on_deployer": bundles.get("has_bundle_on_deployer", False),
         # Collaboration
         "contributor_count": core.get("contributor_count"),
     }

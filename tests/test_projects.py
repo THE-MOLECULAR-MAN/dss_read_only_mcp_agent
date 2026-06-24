@@ -3,7 +3,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dss_mcp.tools.projects import _slim, count_projects, list_all_tags, list_projects
+from dss_mcp.tools.projects import (
+    _is_viable_demo,
+    _slim,
+    _sufficient_commits,
+    count_projects,
+    list_all_tags,
+    list_projects,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +101,13 @@ class TestListProjects:
             {"projectKey": "B", "name": "Beta", "shortDesc": "desc", "tags": ["ml"],
              "ownerLogin": "bob", "versionTag": {"lastModifiedOn": 2}},
         ]
+        # Both projects must pass the viability check
+        mock_project = MagicMock()
+        mock_project.list_datasets.return_value = [1, 2, 3]
+        mock_project.list_recipes.return_value = [1, 2, 3]
+        mock_project.list_jobs.return_value = [{"state": "DONE"}]
+        mock_client.get_project.return_value = mock_project
+
         with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
             result = list_projects()
 
@@ -261,3 +275,177 @@ class TestCountProjects:
         statuses = {n["node_name"]: n["status"] for n in result["nodes"]}
         assert statuses["ok-node"] == "ok"
         assert statuses["bad-node"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# _sufficient_commits — pure function
+# ---------------------------------------------------------------------------
+
+class TestSufficientCommits:
+    def test_version_above_2_passes(self):
+        assert _sufficient_commits({"versionTag": {"versionNumber": 5}}) is True
+
+    def test_version_3_passes(self):
+        assert _sufficient_commits({"versionTag": {"versionNumber": 3}}) is True
+
+    def test_version_2_filtered(self):
+        assert _sufficient_commits({"versionTag": {"versionNumber": 2}}) is False
+
+    def test_version_1_filtered(self):
+        assert _sufficient_commits({"versionTag": {"versionNumber": 1}}) is False
+
+    def test_version_0_filtered(self):
+        assert _sufficient_commits({"versionTag": {"versionNumber": 0}}) is False
+
+    def test_missing_version_tag_passes(self):
+        assert _sufficient_commits({"projectKey": "P"}) is True
+
+    def test_non_dict_version_tag_passes(self):
+        assert _sufficient_commits({"versionTag": "not-a-dict"}) is True
+
+    def test_version_tag_dict_missing_version_number_passes(self):
+        assert _sufficient_commits({"versionTag": {"lastModifiedOn": 123}}) is True
+
+    def test_empty_dict_passes(self):
+        assert _sufficient_commits({}) is True
+
+
+# ---------------------------------------------------------------------------
+# _is_viable_demo — mocked borrow_client
+# ---------------------------------------------------------------------------
+
+def _make_viable_project():
+    """Return a mock project handle that passes all three viability checks."""
+    project = MagicMock()
+    project.list_datasets.return_value = [1, 2, 3]
+    project.list_recipes.return_value = [1, 2, 3]
+    project.list_jobs.return_value = [{"state": "DONE"}]
+    return project
+
+
+class TestIsViableDemo:
+    def test_passes_when_all_thresholds_met(self):
+        mock_client = MagicMock()
+        mock_client.get_project.return_value = _make_viable_project()
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            assert _is_viable_demo("P", _NODE) is True
+
+    def test_filtered_when_fewer_than_2_datasets(self):
+        mock_client = MagicMock()
+        project = _make_viable_project()
+        project.list_datasets.return_value = [1]
+        mock_client.get_project.return_value = project
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            assert _is_viable_demo("P", _NODE) is False
+
+    def test_filtered_when_zero_datasets(self):
+        mock_client = MagicMock()
+        project = _make_viable_project()
+        project.list_datasets.return_value = []
+        mock_client.get_project.return_value = project
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            assert _is_viable_demo("P", _NODE) is False
+
+    def test_filtered_when_fewer_than_2_recipes(self):
+        mock_client = MagicMock()
+        project = _make_viable_project()
+        project.list_recipes.return_value = [1]
+        mock_client.get_project.return_value = project
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            assert _is_viable_demo("P", _NODE) is False
+
+    def test_filtered_when_no_jobs_ever_run(self):
+        mock_client = MagicMock()
+        project = _make_viable_project()
+        project.list_jobs.return_value = []
+        mock_client.get_project.return_value = project
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            assert _is_viable_demo("P", _NODE) is False
+
+    def test_passes_when_exactly_2_datasets_and_2_recipes(self):
+        mock_client = MagicMock()
+        project = _make_viable_project()
+        project.list_datasets.return_value = [1, 2]
+        project.list_recipes.return_value = [1, 2]
+        mock_client.get_project.return_value = project
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            assert _is_viable_demo("P", _NODE) is True
+
+    def test_fail_open_when_dataset_api_errors(self):
+        mock_client = MagicMock()
+        project = _make_viable_project()
+        project.list_datasets.side_effect = RuntimeError("datasets unavailable")
+        mock_client.get_project.return_value = project
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            assert _is_viable_demo("P", _NODE) is True
+
+    def test_fail_open_when_recipe_api_errors(self):
+        mock_client = MagicMock()
+        project = _make_viable_project()
+        project.list_recipes.side_effect = RuntimeError("recipes unavailable")
+        mock_client.get_project.return_value = project
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            assert _is_viable_demo("P", _NODE) is True
+
+    def test_fail_open_when_borrow_client_errors(self):
+        def _bad_borrow(node_name=None):
+            raise RuntimeError("pool exhausted")
+        with patch("dss_mcp.tools.projects.borrow_client", _bad_borrow):
+            assert _is_viable_demo("P", _NODE) is True
+
+
+# ---------------------------------------------------------------------------
+# list_projects — filtering integration
+# ---------------------------------------------------------------------------
+
+class TestListProjectsFiltering:
+    def _make_viable_client(self, projects):
+        mock_client = MagicMock()
+        mock_client.list_projects.return_value = projects
+        mock_project = MagicMock()
+        mock_project.list_datasets.return_value = [1, 2, 3]
+        mock_project.list_recipes.return_value = [1, 2, 3]
+        mock_project.list_jobs.return_value = [{"state": "DONE"}]
+        mock_client.get_project.return_value = mock_project
+        return mock_client
+
+    def test_commit_filter_removes_stub_projects(self):
+        stub = {"projectKey": "STUB", "name": "Stub", "tags": [],
+                "versionTag": {"versionNumber": 1, "lastModifiedOn": 1}}
+        real = {"projectKey": "REAL", "name": "Real", "tags": [],
+                "versionTag": {"versionNumber": 10, "lastModifiedOn": 2}}
+        mock_client = self._make_viable_client([stub, real])
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            result = list_projects()
+        keys = [r["project_key"] for r in result]
+        assert "STUB" not in keys
+        assert "REAL" in keys
+
+    def test_dataset_filter_removes_sparse_projects(self):
+        project_key = "SPARSE"
+        raw = {"projectKey": project_key, "name": "Sparse", "tags": [],
+               "versionTag": {"versionNumber": 5}}
+        mock_client = MagicMock()
+        mock_client.list_projects.return_value = [raw]
+        sparse_project = MagicMock()
+        sparse_project.list_datasets.return_value = [1]  # only 1 dataset → filtered
+        sparse_project.list_recipes.return_value = [1, 2, 3]
+        sparse_project.list_jobs.return_value = [{"state": "DONE"}]
+        mock_client.get_project.return_value = sparse_project
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            result = list_projects()
+        assert result == []
+
+    def test_job_filter_removes_never_run_projects(self):
+        raw = {"projectKey": "IDLE", "name": "Idle", "tags": [],
+               "versionTag": {"versionNumber": 5}}
+        mock_client = MagicMock()
+        mock_client.list_projects.return_value = [raw]
+        idle_project = MagicMock()
+        idle_project.list_datasets.return_value = [1, 2, 3]
+        idle_project.list_recipes.return_value = [1, 2, 3]
+        idle_project.list_jobs.return_value = []  # no jobs → filtered
+        mock_client.get_project.return_value = idle_project
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            result = list_projects()
+        assert result == []

@@ -241,10 +241,7 @@ def _make_p1():
             "name": "Demo Project",
             "short_desc": "A great demo",
             "tags": ["ml", "retail"],
-            "owner_login": "alice",
             "last_modified_on": 1700000000,
-            "project_standards_enforced": 3,
-            "flow_zone_count": 2,
             "contributor_count": 5,
             "inferred_origin": "solutions_hub",
             "origin_evidence": ["tags=['solutions']"],
@@ -269,15 +266,11 @@ def _make_p1():
         "dashboards": {"dashboard_count": 3, "total_tile_count": 12},
         "webapps": {"webapp_count": 2, "webapp_types": ["BOKEH"], "autostarter_webapp_count": 1},
         "scenarios": {"scenario_count": 4},
-        "notebooks": {"notebook_count": 2},
         "eval_stores": {"model_evaluation_store_count": 1},
         "bundles": {"bundle_count": 1, "has_bundle_on_deployer": True},
-        "workspaces": {"in_workspace": True, "workspace_names": ["ws-prod"]},
         "llm_agents": {
             "has_agents": True,
             "agent_count": 2,
-            "has_agent_tools": True,
-            "has_agent_hub": False,
             "llm_connection_names": ["openai-conn"],
         },
         "ml_tasks": {"ml_task_count": 2, "ml_tasks": [{"name": "pred", "task_type": "PREDICTION"}]},
@@ -288,7 +281,6 @@ def _make_p2():
     return {
         "dq_rules": {"pct_datasets_with_dq_rules": 0.6},
         "plugins": {"plugins_used": ["com.dataiku.myplugin"]},
-        "data_collections": {"datasets_in_data_collection": 3},
     }
 
 
@@ -302,7 +294,7 @@ class TestAssemble:
         assert result["name"] == "Demo Project"
         assert result["short_desc"] == "A great demo"
         assert result["tags"] == ["ml", "retail"]
-        assert result["owner_login"] == "alice"
+        assert "owner_login" not in result
 
     def test_timestamps(self):
         result = _assemble("K", None, _make_p1(), _make_p2())
@@ -312,13 +304,13 @@ class TestAssemble:
     def test_origin_fields(self):
         result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["inferred_origin"] == "solutions_hub"
-        assert result["origin_evidence"] == ["tags=['solutions']"]
+        assert "origin_evidence" not in result
 
     def test_recipe_fields(self):
         result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["recipe_count"] == 10
         assert result["recipe_counts_by_category"]["visual"] == 6
-        assert result["recipe_types_present"] == ["python", "shaker"]
+        assert "recipe_types_present" not in result
 
     def test_dataset_fields(self):
         result = _assemble("K", None, _make_p1(), _make_p2())
@@ -338,9 +330,9 @@ class TestAssemble:
         result = _assemble("K", None, _make_p1(), _make_p2())
         assert result["plugins_used"] == ["com.dataiku.myplugin"]
 
-    def test_data_collections_from_phase2(self):
+    def test_data_collections_not_in_output(self):
         result = _assemble("K", None, _make_p1(), _make_p2())
-        assert result["datasets_in_data_collection"] == 3
+        assert "datasets_in_data_collection" not in result
 
     def test_job_success_rate(self):
         result = _assemble("K", None, _make_p1(), _make_p2())
@@ -353,10 +345,10 @@ class TestAssemble:
         assert result["agent_count"] == 2
         assert result["llm_connection_names"] == ["openai-conn"]
 
-    def test_workspace_fields(self):
+    def test_workspace_fields_not_in_output(self):
         result = _assemble("K", None, _make_p1(), _make_p2())
-        assert result["in_workspace"] is True
-        assert result["workspace_names"] == ["ws-prod"]
+        assert "in_workspace" not in result
+        assert "workspace_names" not in result
 
     def test_empty_phase_results_produce_safe_defaults(self):
         result = _assemble("K", None, {}, {})
@@ -365,14 +357,14 @@ class TestAssemble:
         assert result["dataset_count"] == 0
         assert result["pct_datasets_with_dq_rules"] is None
         assert result["plugins_used"] == []
-        assert result["datasets_in_data_collection"] == 0
+        assert "datasets_in_data_collection" not in result
 
     def test_redact_applied_to_output(self):
         # Insert a base64-looking value into a field; _assemble must redact it
         p1 = _make_p1()
-        p1["core"]["owner_login"] = "A" * 40  # looks like a base64 credential
+        p1["core"]["short_desc"] = "A" * 40  # looks like a base64 credential
         result = _assemble("K", None, p1, _make_p2())
-        assert result["owner_login"] == _REDACTED
+        assert result["short_desc"] == _REDACTED
 
     def test_contributor_count(self):
         result = _assemble("K", None, _make_p1(), _make_p2())
@@ -380,7 +372,7 @@ class TestAssemble:
 
     def test_bundle_fields(self):
         result = _assemble("K", None, _make_p1(), _make_p2())
-        assert result["bundle_count"] == 1
+        assert "bundle_count" not in result
         assert result["has_bundle_on_deployer"] is True
 
     def test_node_name_none_when_not_provided(self):
