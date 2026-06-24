@@ -103,6 +103,15 @@ API calls per invocation; do not call this in a loop over all projects.
 Key fields returned and what they signal:
 
   DEMO READINESS
+  - demo_score (0–100)                   Keyword-agnostic composite score. Use
+                                         this as the primary ranking signal when
+                                         comparing candidates. Score = 0 means
+                                         the project failed hard gates (< 3
+                                         recipes or < 3 datasets).
+  - demo_score_breakdown                 Per-dimension scores: visual_story
+                                         (0–40), reliability (0–30),
+                                         ai_capability (0–20), pedigree (0–10),
+                                         plus the individual gate results.
   - dashboard_count / total_tile_count   Higher = more visual, presentable output
   - webapp_count / autostarter_webapp_count  Live interactive UI ready to show
   - recent_job_success_rate (0–1.0)      ≥ 0.8 = data pipeline is reliable

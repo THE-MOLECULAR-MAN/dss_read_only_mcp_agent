@@ -15,6 +15,7 @@ from typing import Any
 from dss_mcp.client import borrow_client, executor, get_nodes, project_url as make_project_url
 from dss_mcp.logging_config import get_logger
 from dss_mcp.security import redact
+from dss_mcp.tools.scoring import compute_demo_score
 
 log = get_logger("tools.summary")
 
@@ -99,7 +100,11 @@ def get_project_summary(project_key: str, node_name: str | None = None) -> dict:
             "project_key": project_key, "node": node_name, "elapsed_s": elapsed,
         })
 
-        return _assemble(project_key, node_name, p1, p2)
+        assembled = _assemble(project_key, node_name, p1, p2)
+        score_data = compute_demo_score(assembled)
+        assembled["demo_score"] = score_data["score"]
+        assembled["demo_score_breakdown"] = score_data["breakdown"]
+        return assembled
 
     except Exception as e:
         log.error("get_project_summary failed", extra={"project_key": project_key, "error": str(e)})
