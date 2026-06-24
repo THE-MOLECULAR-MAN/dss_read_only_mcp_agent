@@ -1,9 +1,17 @@
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dss_mcp.client import borrow_client, get_nodes, project_url as make_project_url
 from dss_mcp.logging_config import get_logger
 
 log = get_logger("tools.projects")
+
+_STOP_WORDS: frozenset[str] = frozenset({
+    "a", "an", "the", "and", "or", "for", "in", "of", "to", "with",
+    "is", "are", "be", "that", "this", "it", "on", "at", "by", "as",
+    "how", "we", "can", "use", "using", "used", "from", "into", "about",
+    "also", "more", "which", "what", "when", "where", "who", "will",
+})
 
 
 def list_projects() -> list[dict] | dict:
@@ -117,6 +125,85 @@ def list_all_tags() -> list[str] | dict:
     except Exception as e:
         log.error("list_all_tags failed", extra={"error": str(e)})
         return {"error": "list_all_tags_failed", "detail": str(e)}
+
+
+def search_projects(query: str, limit: int = 50) -> list[dict] | dict:
+    """Search for projects matching a query across all configured DSS nodes.
+
+    Splits the query into tokens (ignoring stop words and tokens shorter than
+    3 characters) and scores each project by how many tokens appear in its
+    name, short_desc, tags, or project_key. Returns up to `limit` projects
+    sorted by relevance score descending.
+
+    Unlike list_projects(), this never applies the per-project viability check,
+    so it is fast even on large inventories. Projects with 2 or fewer version
+    commits are still excluded (they are empty stubs).
+
+    Use broad terms to cast a wide net — e.g. search "financial crime fraud
+    banking" to surface AML projects, credit card fraud projects, and other
+    financial risk demos even when their names do not contain your exact phrase.
+    """
+    tokens = [
+        t for t in re.split(r"\W+", query.lower())
+        if len(t) >= 3 and t not in _STOP_WORDS
+    ]
+    if not tokens:
+        log.warning("search_projects: no usable tokens after filtering", extra={"query": query})
+        return []
+
+    nodes = get_nodes()
+
+    def _search_node(node_name: str) -> list[tuple[int, dict]]:
+        try:
+            with borrow_client(node_name) as client:
+                projects = client.list_projects()
+            hits: list[tuple[int, dict]] = []
+            for p in projects:
+                if not _sufficient_commits(p):
+                    continue
+                slim = _slim(p, node_name)
+                score = _score_match(slim, tokens)
+                if score > 0:
+                    hits.append((score, slim))
+            return hits
+        except Exception as e:
+            log.error("search_projects node failed", extra={"node": node_name, "error": str(e)})
+            return []
+
+    if len(nodes) == 1:
+        all_hits = _search_node(nodes[0].name)
+    else:
+        all_hits: list[tuple[int, dict]] = []
+        with ThreadPoolExecutor(max_workers=len(nodes)) as ex:
+            for node_hits in ex.map(_search_node, [n.name for n in nodes]):
+                all_hits.extend(node_hits)
+
+    all_hits.sort(key=lambda x: x[0], reverse=True)
+    return [slim for _, slim in all_hits[:limit]]
+
+
+def _score_match(slim: dict, tokens: list[str]) -> int:
+    """Score a slimmed project dict against a list of lowercased query tokens.
+
+    Weights: name = 3pts, short_desc = 2pts, tags = 2pts, project_key = 1pt.
+    Multiple token matches accumulate. Returns 0 if no token matches anywhere.
+    """
+    name = (slim.get("name") or "").lower()
+    desc = (slim.get("short_desc") or "").lower()
+    tags_text = " ".join(t.lower() for t in (slim.get("tags") or []))
+    key_text = re.sub(r"[_\-]+", " ", (slim.get("project_key") or "").lower())
+
+    score = 0
+    for token in tokens:
+        if token in name:
+            score += 3
+        if token in desc:
+            score += 2
+        if token in tags_text:
+            score += 2
+        if token in key_text:
+            score += 1
+    return score
 
 
 def _list_for_node(node_name: str) -> list[dict] | dict:

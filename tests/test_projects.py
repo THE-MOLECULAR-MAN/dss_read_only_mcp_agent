@@ -5,11 +5,13 @@ import pytest
 
 from dss_mcp.tools.projects import (
     _is_viable_demo,
+    _score_match,
     _slim,
     _sufficient_commits,
     count_projects,
     list_all_tags,
     list_projects,
+    search_projects,
 )
 
 
@@ -448,4 +450,156 @@ class TestListProjectsFiltering:
         mock_client.get_project.return_value = idle_project
         with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
             result = list_projects()
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _score_match — pure function
+# ---------------------------------------------------------------------------
+
+class TestScoreMatch:
+    def _slim(self, name="", desc="", tags=None, key="P"):
+        return {"project_key": key, "name": name, "short_desc": desc, "tags": tags or []}
+
+    def test_name_match_scores_3(self):
+        slim = self._slim(name="AML Investigation")
+        assert _score_match(slim, ["aml"]) == 3
+
+    def test_desc_match_scores_2(self):
+        slim = self._slim(desc="anti money laundering compliance")
+        assert _score_match(slim, ["laundering"]) == 2
+
+    def test_tags_match_scores_2(self):
+        slim = self._slim(tags=["financial services", "fraud"])
+        assert _score_match(slim, ["fraud"]) == 2
+
+    def test_key_match_scores_1(self):
+        slim = self._slim(key="AML_TRIAGE")
+        # project_key is split on _ so "aml" and "triage" are separate tokens
+        assert _score_match(slim, ["aml"]) == 1
+
+    def test_multi_field_match_accumulates(self):
+        slim = self._slim(name="AML Project", desc="aml detection", tags=["aml"], key="AML_DEMO")
+        score = _score_match(slim, ["aml"])
+        assert score == 3 + 2 + 2 + 1  # name + desc + tags + key
+
+    def test_multi_token_accumulates(self):
+        slim = self._slim(name="Fraud Detection", desc="money laundering")
+        score = _score_match(slim, ["fraud", "money"])
+        assert score == 3 + 2  # "fraud" in name=3, "money" in desc=2
+
+    def test_no_match_returns_zero(self):
+        slim = self._slim(name="Supply Chain", desc="inventory management")
+        assert _score_match(slim, ["aml", "fraud"]) == 0
+
+    def test_none_fields_handled(self):
+        slim = {"project_key": None, "name": None, "short_desc": None, "tags": None}
+        assert _score_match(slim, ["aml"]) == 0
+
+    def test_key_underscore_split(self):
+        # DEMO_AML_INVESTIGATION → "demo aml investigation" → "aml" matches
+        slim = self._slim(key="DEMO_AML_INVESTIGATION")
+        assert _score_match(slim, ["aml"]) == 1
+
+    def test_key_hyphen_split(self):
+        slim = self._slim(key="anti-money-laundering")
+        assert _score_match(slim, ["money"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# search_projects — mocked borrow_client + get_nodes
+# ---------------------------------------------------------------------------
+
+def _make_search_client(projects):
+    mock_client = MagicMock()
+    mock_client.list_projects.return_value = projects
+    return mock_client
+
+
+class TestSearchProjects:
+    def _raw(self, key, name, desc="", tags=None, version=10):
+        return {
+            "projectKey": key,
+            "name": name,
+            "shortDesc": desc,
+            "tags": tags or [],
+            "ownerLogin": "alice",
+            "versionTag": {"versionNumber": version, "lastModifiedOn": 1},
+        }
+
+    def test_returns_matching_projects(self):
+        projects = [
+            self._raw("AML1", "AML Investigation", desc="anti money laundering"),
+            self._raw("UNRELATED", "Weather Forecasting", desc="climate data"),
+        ]
+        mock_client = _make_search_client(projects)
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            result = search_projects("anti money laundering")
+        keys = [r["project_key"] for r in result]
+        assert "AML1" in keys
+        assert "UNRELATED" not in keys
+
+    def test_returns_empty_when_nothing_matches(self):
+        mock_client = _make_search_client([
+            self._raw("WX", "Weather", desc="climate"),
+        ])
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            result = search_projects("money laundering")
+        assert result == []
+
+    def test_results_sorted_by_score_descending(self):
+        projects = [
+            self._raw("LOW", "AML data"),           # name match only → score 3
+            self._raw("AML_HIGH", "AML Investigation",   # name + desc + tags
+                      desc="aml fraud compliance", tags=["aml"]),
+        ]
+        mock_client = _make_search_client(projects)
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            result = search_projects("aml")
+        assert result[0]["project_key"] == "AML_HIGH"
+        assert result[1]["project_key"] == "LOW"
+
+    def test_limit_caps_results(self):
+        projects = [self._raw(f"P{i}", f"AML Project {i}") for i in range(20)]
+        mock_client = _make_search_client(projects)
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            result = search_projects("aml", limit=5)
+        assert len(result) == 5
+
+    def test_empty_query_returns_empty_list(self):
+        mock_client = _make_search_client([self._raw("P", "AML Project")])
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            result = search_projects("a the or")  # all stop words / too short
+        assert result == []
+
+    def test_commit_filter_applied(self):
+        stub = self._raw("STUB", "AML stub", version=1)  # only 1 commit → excluded
+        real = self._raw("REAL", "AML real", version=5)
+        mock_client = _make_search_client([stub, real])
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            result = search_projects("aml")
+        keys = [r["project_key"] for r in result]
+        assert "STUB" not in keys
+        assert "REAL" in keys
+
+    def test_broad_terms_catch_adjacent_domains(self):
+        projects = [
+            self._raw("FRAUD", "Credit Card Fraud Detection",
+                      desc="detect fraudulent transactions in financial services",
+                      tags=["fraud", "financial services"]),
+            self._raw("UNRELATED", "Image Classification", desc="computer vision"),
+        ]
+        mock_client = _make_search_client(projects)
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            # "financial crime fraud" should match credit card fraud even without "aml"
+            result = search_projects("financial crime fraud banking")
+        keys = [r["project_key"] for r in result]
+        assert "FRAUD" in keys
+        assert "UNRELATED" not in keys
+
+    def test_node_error_returns_empty_for_that_node(self):
+        mock_client = MagicMock()
+        mock_client.list_projects.side_effect = RuntimeError("unreachable")
+        with patch("dss_mcp.tools.projects.borrow_client", _make_borrow(mock_client)):
+            result = search_projects("aml")
         assert result == []

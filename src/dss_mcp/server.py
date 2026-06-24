@@ -44,7 +44,7 @@ from fastmcp import FastMCP
 
 from dss_mcp.logging_config import get_logger, setup_logging
 from dss_mcp.tools.node import get_node_info
-from dss_mcp.tools.projects import count_projects, list_all_tags, list_projects
+from dss_mcp.tools.projects import count_projects, list_all_tags, list_projects, search_projects
 from dss_mcp.tools.summary import get_project_summary
 
 setup_logging()
@@ -60,41 +60,45 @@ build, run, or delete anything on DSS.
 
 ## Available tools
 
+### search_projects(query, limit=50)
+THE PRIMARY DISCOVERY TOOL. Searches project names, descriptions, tags, and
+keys across all nodes for the given query string. Returns up to `limit`
+projects sorted by relevance score — no per-project API calls, safe on any
+inventory size.
+
+Key design: use BROAD search terms. The query is split into individual tokens
+and each is matched independently, so "financial crime fraud banking" will
+surface AML projects, credit card fraud demos, anti-money-laundering solutions,
+and any financial risk project — even when none contain your exact phrase.
+Always prefer broad terms over narrow exact phrases.
+
 ### count_projects()
 Returns the total number of projects visible across all configured nodes,
 plus per-node identity (node_name and host URL) and per-node counts.
-Calls list_project_keys() — much lighter than list_projects(). Use this to:
-  - Quickly scope how many projects exist before a full list query
-  - Confirm which nodes are reachable and how many projects each holds
-  - Answer "how many projects do we have?" without loading full metadata
+Calls list_project_keys() — much lighter than list_projects(). Use to scope
+the inventory or confirm which nodes are reachable before heavier queries.
 
 ### get_node_info()
 Returns connectivity status and DSS version for every configured node. Call
-this first if you are unsure which nodes are reachable, or if a user asks
-what instances are connected. A node with status "error" is unreachable or
-using a non-admin key (project listing still works; node metadata does not).
+when you are unsure which nodes are reachable, or if a user asks what
+instances are connected.
 
 ### list_projects()
-Returns lightweight metadata for EVERY project visible across ALL nodes in a
-single parallel call. Each entry contains:
-  - project_key, name, short_desc, tags, owner_login, last_modified_on
-  - node_name  — which DSS node this project lives on
-  - project_url — direct browser link to the project's Flow (always share this)
-
-Use this as your starting point for every discovery task. Filter and score
-candidates from this list before calling get_project_summary.
+Returns lightweight metadata for EVERY project visible across ALL nodes.
+WARNING: on large instances this may return thousands of projects and consume
+significant context. Prefer search_projects() for all discovery tasks.
+Only use list_projects() when you genuinely need the full inventory (e.g.,
+building a complete tag taxonomy or counting projects by category).
 
 ### list_all_tags()
 Returns a deduplicated sorted list of every tag used across all nodes. Call
-this when a user wants to understand the available taxonomy, browse by
-industry or capability, or when you need to map a prospect's keywords to
-real tag values before filtering list_projects results.
+this to understand the available taxonomy, or to map a prospect's keywords
+to real tag values before calling search_projects.
 
 ### get_project_summary(project_key, node_name)
-Returns comprehensive detail for a single project. Always pass the node_name
-exactly as it appears in the list_projects response — it identifies which DSS
-instance to query. Makes ~16 parallel API calls per invocation; do not call
-this in a loop over all projects.
+Returns comprehensive detail for a single project. Always pass node_name
+exactly as it appears in the search_projects response. Makes ~13 parallel
+API calls per invocation; do not call this in a loop over all projects.
 
 Key fields returned and what they signal:
 
@@ -125,26 +129,26 @@ Key fields returned and what they signal:
 
 ## Standard workflow
 
-1. CALL list_projects() to get the full inventory across all nodes.
+1. CALL search_projects(query) with broad terms covering the prospect's
+   industry, use case, and adjacent concepts. Examples:
+     "anti money laundering" → use "financial crime fraud banking compliance"
+     "supply chain" → use "supply chain logistics inventory procurement"
+   This returns up to 50 scored candidates without overloading context.
 
-2. FILTER candidates from the metadata alone — no need for get_project_summary
-   at this stage. Look at: tags, short_desc, name, last_modified_on.
-   Match against the prospect's industry, use case, and tech requirements.
+2. SCAN the returned list. Identify the top 3–6 candidates based on name,
+   short_desc, and tags alone. No get_project_summary calls yet.
 
-3. SELECT the top 3–6 candidates. Do not call get_project_summary on
-   every project — it is expensive and unnecessary.
+3. CALL get_project_summary(project_key, node_name) for each candidate.
+   Use the node_name field from search_projects exactly as returned.
 
-4. CALL get_project_summary(project_key, node_name) for each candidate.
-   Use the node_name field from list_projects exactly as returned.
-
-5. SCORE each candidate on demo readiness:
+4. SCORE each candidate on demo readiness:
    - recent_job_success_rate ≥ 0.8  (data works reliably)
    - dashboard_count > 0 or webapp_count > 0  (something to show visually)
    - last_built_on within 6 months  (not stale)
    - inferred_origin = solutions_hub  (bonus: production-quality)
    - has_agents = true or llm_connection_names non-empty  (for AI prospects)
 
-6. RETURN ranked recommendations. For each, include:
+5. RETURN ranked recommendations. For each, include:
    - The project_url (direct link — always include this)
    - Name and short description
    - Why it fits the prospect's use case
@@ -155,13 +159,13 @@ Key fields returned and what they signal:
 
 | Situation | Tool |
 |-----------|------|
+| Starting a demo search for a prospect | search_projects() → get_project_summary() |
 | "How many projects do we have?" | count_projects() |
 | Confirming which nodes are up and reachable | count_projects() or get_node_info() |
-| Starting a demo search for a prospect | list_projects() → get_project_summary() |
 | User asks what tags/industries are covered | list_all_tags() |
 | User asks which nodes are connected | get_node_info() |
 | Deep evaluation of a specific project | get_project_summary() |
-| Checking if any project covers a capability | list_projects() → filter by tags/desc |
+| Need the full unfiltered project list | list_projects() (use sparingly) |
 
 ## Important constraints
 
@@ -177,6 +181,7 @@ Key fields returned and what they signal:
 
 # Register tools by passing plain functions to mcp.tool().
 # Tool docstrings become the MCP tool descriptions visible to the LLM.
+mcp.tool()(search_projects)
 mcp.tool()(count_projects)
 mcp.tool()(list_projects)
 mcp.tool()(get_project_summary)
